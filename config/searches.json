@@ -14,7 +14,7 @@
   "invaluable": [
     {
       "id": "invaluable-all-feeds",
-      "enabled": true,
+      "enabled": false,
       "sender_domains": [],
       "subject_contains": [],
       "limit": 200,

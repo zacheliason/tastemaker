@@ -45,10 +45,8 @@ jobs:
         run: python -m playwright install --with-deps chromium
       - name: Apply database schema
         run: python -c 'import os; from pathlib import Path; import psycopg; conn=psycopg.connect(os.environ["DATABASE_URL"]); conn.execute(Path("db/schema.sql").read_text()); conn.commit(); conn.close()'
-      - name: Ingest Invaluable
-        run: python -m listing_agent.cli ingest --source invaluable
-      - name: Ingest eBay
-        run: python -m listing_agent.cli ingest --source ebay
+      - name: Ingest enabled sources
+        run: python -m listing_agent.cli ingest
       - name: Apply deterministic filters
         run: python -m listing_agent.cli filter
       - name: Run AI judgments
