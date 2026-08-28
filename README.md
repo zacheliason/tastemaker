@@ -71,7 +71,23 @@ After the workflow file is present, open the repository’s **Actions** tab, sel
 
 ## Search Configuration
 
-Edit `config/searches.json`.
+Edit `config/searches.json`. The top-level `sources` object is the source registry. Each source declares its own `enabled` gate, adapter module, and searches:
+
+```json
+{
+  "sources": {
+    "my-source": {
+      "enabled": true,
+      "adapter": "my_source",
+      "searches": []
+    }
+  }
+}
+```
+
+To add a source, add one registry entry and its adapter module under `listing_agent/`. The runner, filtering, and AI stages discover enabled registry entries automatically; they do not need source-name edits. A source with `enabled: false` is skipped before credentials are read or its adapter is imported.
+
+Within each source’s `searches` array, edit:
 
 - eBay uses the official Browse API; eBay pages are not scraped.
 - Invaluable uses listing-alert emails from the configured inbox.
@@ -132,7 +148,7 @@ Invaluable email ingestion remains the baseline if browser enrichment encounters
 
 ## Digest And Feedback
 
-The digest is sent to `DIGEST_TO`, grouped by source, and includes USD price, sale timing when available, listing image, URL, and concise reasoning.
+The digest is sent to `DIGEST_TO`, grouped by source, and includes USD price, sale timing when available, listing image, URL, concise reasoning, and an LLM usage footer showing prompt, completion, and total tokens. Listing images are fetched transiently by the runner and embedded in the email; they are not retained in Supabase Storage. Fast-tracked digests report zero usage.
 
 Like and Dislike buttons create pre-addressed replies to `IMAP_USERNAME`. Their subjects and bodies identify the listing so a later workflow can add feedback to the correct category pool.
 

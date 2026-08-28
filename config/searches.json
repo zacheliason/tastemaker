@@ -1,25 +1,32 @@
 {
-  "ebay": [
-    {
-      "id": "ebay-rl-cream-pleated-trousers-w30",
+  "default_enrichment_source": "invaluable",
+  "sources": {
+    "ebay": {
       "enabled": false,
+      "adapter": "ebay",
+      "searches": [{
+      "id": "ebay-rl-cream-pleated-trousers-w30",
+      "enabled": true,
       "query": "ralph lauren polo cream pleated trousers waist size 30",
       "limit": 100,
       "max_price_usd": 100,
       "category": "clothing",
       "category_ids": [],
       "exclude_keywords": []
-    }
-  ],
-  "invaluable": [
-    {
+      }]
+    },
+    "invaluable": {
+      "enabled": true,
+      "adapter": "invaluable",
+      "searches": [{
       "id": "invaluable-all-feeds",
-      "enabled": false,
+      "enabled": true,
       "sender_domains": [],
       "subject_contains": [],
       "limit": 200,
       "max_price_usd": 200,
       "category": "art"
+      }]
     }
-  ]
+  }
 }

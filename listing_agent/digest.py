@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import html
+import hashlib
 import os
 import smtplib
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from urllib.parse import quote
+
+import httpx
 
 from .config import required_env
 
@@ -46,7 +49,7 @@ def _pretty_date(value: datetime) -> str:
     return value.strftime("%B %d, %Y").replace(" 0", " ")
 
 
-def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient: str | None = None) -> tuple[str, str]:
+def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient: str | None = None, usage: dict | None = None, image_sources: dict[str, str] | None = None) -> tuple[str, str]:
     feedback_recipient = feedback_recipient or recipient
     grouped = {}
     for row in rows:
@@ -73,7 +76,8 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
                 text.append(remaining)
             text.extend([f"Verdict: {row['taste_verdict']}. {reason}", f"Like: {like}", f"Dislike: {dislike}", ""])
             image = row["image_urls"][0] if row["image_urls"] else ""
-            image_html = f'<img src="{html.escape(image, quote=True)}" style="max-width:320px;max-height:240px"><br>' if image else ""
+            image_source = (image_sources or {}).get(row["external_id"], image)
+            image_html = f'<img src="{html.escape(image_source, quote=True)}" alt="Listing image" width="320" style="display:block;width:100%;max-width:320px;height:auto;max-height:240px;object-fit:contain"><br>' if image_source else ""
             blocks.append(f'''<div style="margin:0 0 16px;padding:18px;background:#fffefa;border:1px solid #ddd6cc;border-radius:8px;box-shadow:0 2px 8px rgba(50,40,30,.04)">
 {image_html}<h3 style="margin:12px 0 6px;font-family:Georgia,'Times New Roman',serif;font-size:20px;font-weight:400;line-height:1.25"><a style="color:#252321;text-decoration:none" href="{html.escape(row['url'], quote=True)}">{html.escape(row['title'])}</a></h3>
 <p style="margin:0 0 4px;font-size:13px;color:#514b45">{html.escape(_price(row['price'], row['currency'], row['price_usd']))}</p>
@@ -84,6 +88,10 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
     if not rows:
         text.append("No matching listings.")
         blocks.append("<p style=\"padding:18px;background:#fffefa;border:1px solid #ddd6cc;border-radius:8px\">No matching listings.</p>")
+    usage = usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    usage_line = f"LLM usage: {usage['prompt_tokens']} prompt + {usage['completion_tokens']} completion = {usage['total_tokens']} tokens"
+    text.extend(["", usage_line])
+    blocks.append(f'<p style="margin:28px 0 0;padding-top:12px;border-top:1px solid #d8d1c7;color:#8a8177;font-size:11px">{html.escape(usage_line)}</p>')
     blocks.append("</div></div>")
     return "\n".join(text), "".join(blocks)
 
@@ -96,6 +104,33 @@ def fetch_rows(conn, start: datetime) -> list[dict]:
         order by l.source, j.taste_verdict, j.judged_at desc""", (start,)).fetchall()
     keys = ("source", "external_id", "title", "price", "currency", "price_usd", "url", "image_urls", "sale_end_at", "title_reason", "taste_verdict", "taste_reason")
     return [dict(zip(keys, row)) for row in rows]
+
+
+def fetch_usage(conn, start: datetime) -> dict:
+    row = conn.execute("select coalesce(sum(prompt_tokens), 0), coalesce(sum(completion_tokens), 0), coalesce(sum(total_tokens), 0) from llm_usage where recorded_at >= %s", (start,)).fetchone()
+    return {"prompt_tokens": row[0], "completion_tokens": row[1], "total_tokens": row[2]}
+
+
+def download_images(rows: list[dict]) -> tuple[dict[str, str], list[tuple[str, bytes, str, str]]]:
+    """Fetch images only in memory for this message; do not retain marketplace images."""
+    sources, attachments = {}, []
+    for row in rows:
+        url = (row.get("image_urls") or [None])[0]
+        if not url or not url.lower().startswith("https://"):
+            continue
+        try:
+            response = httpx.get(url, timeout=20, follow_redirects=True)
+            response.raise_for_status()
+            content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+            if not content_type.startswith("image/") or len(response.content) > 5 * 1024 * 1024:
+                continue
+            maintype, subtype = content_type.split("/", 1)
+            cid = f"listing-{hashlib.sha256(row['external_id'].encode()).hexdigest()[:16]}@digest"
+            sources[row["external_id"]] = f"cid:{cid}"
+            attachments.append((cid, response.content, maintype, subtype))
+        except (httpx.HTTPError, ValueError):
+            continue
+    return sources, attachments
 
 
 def send(message: EmailMessage, host: str, port: int, username: str, password: str) -> None:
@@ -112,14 +147,21 @@ def send(message: EmailMessage, host: str, port: int, username: str, password: s
 
 def deliver(conn, start: datetime, recipient: str, dry_run: bool = False) -> int:
     rows = fetch_rows(conn, start)
+    if not rows and not dry_run:
+        return 0
     feedback_recipient = os.environ.get("IMAP_USERNAME") or recipient
-    text, markup = render(rows, recipient, start, feedback_recipient)
+    image_sources, attachments = download_images(rows) if not dry_run else ({}, [])
+    text, markup = render(rows, recipient, start, feedback_recipient, fetch_usage(conn, start), image_sources)
     message = EmailMessage()
     message["Subject"] = f"Daily listing digest: {len(rows)} match{'es' if len(rows) != 1 else ''}"
     message["From"] = os.environ.get("DIGEST_FROM") or os.environ.get("SMTP_USERNAME") or os.environ.get("IMAP_USERNAME", "listing-agent@localhost")
     message["To"] = recipient
     message.set_content(text)
     message.add_alternative(markup, subtype="html")
+    if attachments:
+        html_part = message.get_payload()[-1]
+        for cid, data, maintype, subtype in attachments:
+            html_part.add_related(data, maintype=maintype, subtype=subtype, cid=cid, disposition="inline")
     if not dry_run:
         host = os.environ.get("SMTP_HOST") or ("smtp.gmail.com" if os.environ.get("IMAP_HOST") == "imap.gmail.com" else "")
         username = os.environ.get("SMTP_USERNAME") or os.environ.get("IMAP_USERNAME", "")

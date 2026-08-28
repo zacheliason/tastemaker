@@ -13,6 +13,30 @@ def test_remaining_includes_sale_date():
     assert _remaining(end, now) == "18 Days Remaining | Sale on September 16, 2026 at 10:00 AM"
 
 
+def test_render_includes_llm_usage_footer():
+    text, markup = render([], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc), usage={
+        "prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15
+    })
+    assert "LLM usage: 12 prompt + 3 completion = 15 tokens" in text
+    assert "LLM usage: 12 prompt + 3 completion = 15 tokens" in markup
+
+
+def test_download_images_keeps_content_in_memory(monkeypatch):
+    from listing_agent.digest import download_images
+
+    class Response:
+        headers = {"content-type": "image/jpeg"}
+        content = b"jpeg-bytes"
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr("listing_agent.digest.httpx.get", lambda *args, **kwargs: Response())
+    sources, attachments = download_images([{"external_id": "abc", "image_urls": ["https://example.test/image.jpg"]}])
+    assert sources["abc"].startswith("cid:listing-")
+    assert attachments[0][1] == b"jpeg-bytes"
+
+
 def test_render_groups_listing_and_adds_feedback_links():
     text, markup = render([{
         "source": "ebay", "external_id": "abc", "title": "Cream trousers",

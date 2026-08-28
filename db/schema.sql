@@ -73,3 +73,17 @@ create table if not exists digest_runs (
   sent_at timestamptz not null default now(),
   primary key (digest_date, recipient)
 );
+
+create table if not exists llm_usage (
+  id bigserial primary key,
+  listing_id bigint references listings(id) on delete set null,
+  operation text not null check (operation in ('title_gate', 'taste_judgment')),
+  model text not null,
+  prompt_tokens integer not null default 0,
+  completion_tokens integer not null default 0,
+  total_tokens integer not null default 0,
+  listing_count integer not null default 1,
+  recorded_at timestamptz not null default now()
+);
+
+create index if not exists llm_usage_recorded_at_idx on llm_usage (recorded_at desc);

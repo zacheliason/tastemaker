@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from .config import configured_sources, enabled_searches
 
 
 def evaluate(row: dict, search: dict) -> tuple[str, str | None]:
@@ -24,10 +25,13 @@ def evaluate(row: dict, search: dict) -> tuple[str, str | None]:
 
 
 def apply(conn, searches: dict, source: str | None = None) -> dict[str, dict[str, int]]:
-    sources = [source] if source else list(searches)
+    configured = dict(configured_sources(searches))
+    sources = [source] if source else list(configured)
     summary = {}
     for current_source in sources:
-        source_searches = {item["id"]: item for item in searches.get(current_source, [])}
+        if current_source not in configured:
+            continue
+        source_searches = {item["id"]: item for item in enabled_searches(configured[current_source])}
         rows = conn.execute("select id, search_id, title, description, price_usd, size_fields from listings where source = %s", (current_source,)).fetchall()
         before = len(rows)
         passed = filtered = 0
