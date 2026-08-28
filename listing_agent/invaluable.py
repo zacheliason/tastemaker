@@ -136,20 +136,31 @@ async def fetch_lot_page_browser(url: str, search_id: str) -> Listing:
     from playwright.async_api import async_playwright
 
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
+        browser = await playwright.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
         try:
             page = await browser.new_page(
-                user_agent="listing-taste-filter/0.1 (personal research agent)",
                 viewport={"width": 1365, "height": 900},
+                locale="en-US",
+                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             )
+            await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             response = await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
-            if response is None or response.status >= 400:
+            if response is None or response.status >= 500 or response.status == 404:
                 status = response.status if response else "no response"
                 raise RuntimeError(f"Invaluable browser request failed: HTTP {status}")
-            listing = parse_lot_page(await page.content(), url, search_id)
-            if not listing.raw_data or listing.title.lower() in {"javascript is disabled", "access denied"}:
-                raise RuntimeError("Invaluable returned a browser challenge instead of lot data")
-            return listing
+            # CloudFront may need several seconds to complete its JavaScript
+            # check. Do not parse the challenge's placeholder as a real lot.
+            last_title = ""
+            for _ in range(12):
+                listing = parse_lot_page(await page.content(), url, search_id)
+                last_title = listing.title
+                if listing.raw_data and listing.title.lower() not in {"javascript is disabled", "access denied"}:
+                    return listing
+                await page.wait_for_timeout(2_500)
+            raise RuntimeError(f"Invaluable returned a browser challenge instead of lot data (title={last_title!r})")
         finally:
             await browser.close()
 

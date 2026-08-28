@@ -37,6 +37,7 @@ def main() -> None:
         item = asyncio.run(adapter.fetch_lot_page_browser(args.url, search_id))
         print(f"title: {item.title}")
         print(f"price: {item.price} {item.currency}")
+        print(f"sale_end_at: {item.sale_end_at}")
         print(f"external_id: {item.external_id}")
         print(f"images: {len(item.image_urls)}")
         print(f"description: {item.description}")
