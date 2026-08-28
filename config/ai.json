@@ -1,0 +1,19 @@
+{
+  "model": "gpt-5.6-luna",
+  "max_completion_tokens": 80,
+  "pre_llm_policy": {
+    "invaluable": {
+      "fast_track_subject_contains": [
+        "Josef Albers",
+        "Sabra Field",
+        "Sabra Johnson Field"
+      ]
+    }
+  },
+  "title_gate": {
+    "instructions": "Screen each listing against its configured search. Reject clear title/spec mismatches and do not invent facts. Return JSON: {results:[{external_id,pass,reason}]}. Make reason <=8 words."
+  },
+  "taste_judgment": {
+    "instructions": "Compare the listing only with same-category references. Ignore price and popularity. Return JSON: {verdict,reason}, with verdict like, dislike, or uncertain; reason <=8 words."
+  }
+}

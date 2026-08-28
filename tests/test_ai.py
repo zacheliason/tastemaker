@@ -1,0 +1,34 @@
+from listing_agent.ai import OpenAIJudge, is_fast_tracked, title_gate, taste_judgment
+
+
+class FakeJudge(OpenAIJudge):
+    def __init__(self, result):
+        self.model = "gpt-5.6-luna"
+        self.result = result
+        self.messages = []
+
+    def complete(self, messages):
+        self.messages.append(messages)
+        return self.result
+
+
+def test_title_gate_batches_listings_and_returns_results():
+    listings = [{"external_id": "x", "search_id": "s", "title": "RL trousers", "description": "", "size_fields": {}}]
+    result = title_gate(FakeJudge({"results": [{"external_id": "x", "pass": True, "reason": "Matches."}]}), listings, {"s": {"query": "trousers", "required_size_fields": {"waist": 30}}})
+    assert result == {"x": {"pass": True, "reason": "Matches."}}
+
+
+def test_fast_track_uses_invaluable_email_subject():
+    config = {"pre_llm_policy": {"invaluable": {"fast_track_subject_contains": ["Josef Albers"]}}}
+    assert is_fast_tracked({"source": "invaluable", "raw_data": {"email_subject": "New pieces from Josef Albers"}}, config)
+    assert not is_fast_tracked({"source": "invaluable", "raw_data": {"email_subject": "Mid century modern clocks"}}, config)
+
+
+def test_taste_judgment_normalizes_invalid_verdict():
+    judge = FakeJudge({"verdict": "maybe", "reason": "Unclear."})
+    result = taste_judgment(judge, {"title": "item", "image_urls": ["https://example.test/listing.jpg"]}, [{"label": "like", "description": "", "url": "https://example.test/ref.jpg"}])
+    assert result == {"verdict": "uncertain", "reason": "Unclear."}
+    content = judge.messages[0][0]["content"]
+    assert [item["image_url"]["url"] for item in content if item["type"] == "image_url"] == [
+        "https://example.test/listing.jpg", "https://example.test/ref.jpg"
+    ]

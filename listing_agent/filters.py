@@ -1,0 +1,43 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+
+def evaluate(row: dict, search: dict) -> tuple[str, str | None]:
+    title = (row.get("title") or "").lower()
+    description = (row.get("description") or "").lower()
+    text = f"{title} {description}"
+    excluded = [word.lower() for word in search.get("exclude_keywords", [])]
+    found = next((word for word in excluded if word in text), None)
+    if found:
+        return "filtered", f"excluded keyword: {found}"
+
+    max_price = search.get("max_price_usd")
+    if max_price is not None and row.get("price_usd") is not None and row["price_usd"] > max_price:
+        return "filtered", f"price_usd {row['price_usd']} exceeds max_price_usd {max_price}"
+
+    for field, expected in search.get("required_size_fields", {}).items():
+        actual = (row.get("size_fields") or {}).get(field)
+        if actual is not None and str(actual).lower() != str(expected).lower():
+            return "filtered", f"structured size mismatch: {field}={actual}"
+    return "passed", None
+
+
+def apply(conn, searches: dict, source: str | None = None) -> dict[str, dict[str, int]]:
+    sources = [source] if source else list(searches)
+    summary = {}
+    for current_source in sources:
+        source_searches = {item["id"]: item for item in searches.get(current_source, [])}
+        rows = conn.execute("select id, search_id, title, description, price_usd, size_fields from listings where source = %s", (current_source,)).fetchall()
+        before = len(rows)
+        passed = filtered = 0
+        for row in rows:
+            data = {"title": row[2], "description": row[3], "price_usd": row[4], "size_fields": row[5]}
+            status, reason = evaluate(data, source_searches.get(row[1], {}))
+            if status == "passed":
+                passed += 1
+            else:
+                filtered += 1
+            conn.execute("update listings set filter_status = %s, filter_reason = %s, filtered_at = %s where id = %s", (status, reason, datetime.now(timezone.utc) if reason else None, row[0]))
+        summary[current_source] = {"before": before, "passed": passed, "filtered": filtered}
+    return summary
