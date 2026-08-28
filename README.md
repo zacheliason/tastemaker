@@ -146,6 +146,21 @@ Each scheduled run should:
 
 Invaluable email ingestion remains the baseline if browser enrichment encounters a WAF or page challenge. Auction end dates are stored when available and displayed as `X Days Remaining | Sale on DATE`.
 
+The Invaluable ingestion step logs enrichment counts, for example `invaluable enrichment: {'success': 2, 'fallback_email': 1}`. It also logs each failed listing's URL, attempt count, and retry errors. Listings store `enrichment_status`, `enrichment_attempts`, and (for failures) bounded `enrichment_error` and `enrichment_retry_errors` values in `raw_data`.
+
+To inspect the latest persisted results in Supabase SQL Editor:
+
+```sql
+select title,
+       raw_data->>'enrichment_status' as enrichment_status,
+       raw_data->>'enrichment_attempts' as enrichment_attempts,
+       raw_data->>'enrichment_error' as enrichment_error,
+       sale_end_at
+from listings
+where source = 'invaluable'
+order by fetched_at desc;
+```
+
 ## Digest And Feedback
 
 The digest is sent to `DIGEST_TO`, grouped by source, and includes USD price, sale timing when available, listing image, URL, concise reasoning, and an LLM usage footer showing prompt, completion, and total tokens. Listing images are fetched transiently by the runner and embedded in the email; they are not retained in Supabase Storage. Fast-tracked digests report zero usage.

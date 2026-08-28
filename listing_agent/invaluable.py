@@ -156,12 +156,22 @@ async def fetch_lot_page_browser(url: str, search_id: str) -> Listing:
 
 def enrich_with_retry(candidate: Listing, attempts: int = 4) -> Listing:
     import asyncio
-
+    errors = []
     for attempt in range(attempts):
         try:
-            return asyncio.run(fetch_lot_page_browser(candidate.url, candidate.search_id))
-        except Exception:
+            enriched = asyncio.run(fetch_lot_page_browser(candidate.url, candidate.search_id))
+            enriched.raw_data["enrichment_status"] = "success"
+            enriched.raw_data["enrichment_attempts"] = attempt + 1
+            if errors:
+                enriched.raw_data["enrichment_retry_errors"] = errors
+            return enriched
+        except Exception as error:
+            errors.append({"attempt": attempt + 1, "error": str(error)[:500]})
             if attempt == attempts - 1:
+                candidate.raw_data["enrichment_status"] = "fallback_email"
+                candidate.raw_data["enrichment_attempts"] = attempts
+                candidate.raw_data["enrichment_error"] = errors[-1]["error"]
+                candidate.raw_data["enrichment_retry_errors"] = errors
                 return candidate
             time.sleep(2 ** attempt)
 
@@ -193,6 +203,13 @@ def fetch(search: dict) -> list[Listing]:
                 enriched.currency = currency
                 enriched.price_usd = to_usd(amount, currency)
                 listings.append(enriched)
+        statuses = {}
+        for item in listings:
+            status = item.raw_data.get("enrichment_status", "unknown")
+            statuses[status] = statuses.get(status, 0) + 1
+            if status == "fallback_email":
+                print(f"invaluable enrichment failed: url={item.url} attempts={item.raw_data.get('enrichment_attempts')} errors={item.raw_data.get('enrichment_retry_errors')}")
+        print(f"invaluable enrichment: {statuses}")
         return listings
     finally:
         try:

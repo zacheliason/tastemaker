@@ -1,5 +1,6 @@
 from email.message import EmailMessage
-from listing_agent.invaluable import parse_lot_page, parse_message
+from listing_agent.invaluable import enrich_with_retry, parse_lot_page, parse_message
+from listing_agent.models import Listing
 
 
 def test_parse_message_extracts_listing_fields():
@@ -33,3 +34,17 @@ def test_parse_lot_page_reads_visible_auction_date():
     assert item.sale_end_at.month == 9
     assert item.sale_end_at.day == 16
     assert item.sale_end_at.hour == 10
+
+
+def test_enrichment_fallback_keeps_retry_reasons(monkeypatch):
+    async def fail(url, search_id):
+        raise RuntimeError("browser challenge detected")
+
+    monkeypatch.setattr("listing_agent.invaluable.fetch_lot_page_browser", fail)
+    candidate = Listing("invaluable", "test", "id", "Lot", None, None, "https://example.test/lot")
+    result = enrich_with_retry(candidate, attempts=2)
+    assert result.raw_data["enrichment_status"] == "fallback_email"
+    assert result.raw_data["enrichment_retry_errors"] == [
+        {"attempt": 1, "error": "browser challenge detected"},
+        {"attempt": 2, "error": "browser challenge detected"},
+    ]
