@@ -8,3 +8,7 @@ def strip_query(value: str | None) -> str:
 
 def strip_queries(values: list[str]) -> list[str]:
     return [strip_query(value) for value in values if value]
+
+
+def url_key(value: str | None) -> str:
+    return strip_query(value).strip().lower().rstrip("/")

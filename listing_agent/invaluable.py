@@ -18,7 +18,7 @@ from bs4 import BeautifulSoup
 from .config import required_env
 from .models import Listing
 from .pricing import parse_price, to_usd
-from .urls import strip_queries, strip_query
+from .urls import strip_queries, strip_query, url_key
 
 
 def _text(value: str | None) -> str:
@@ -281,6 +281,13 @@ def enrich_with_retry(
 
 def fetch(search: dict) -> list[Listing]:
     env = required_env("IMAP_HOST", "IMAP_USERNAME", "IMAP_PASSWORD")
+    import psycopg
+    db_env = required_env("DATABASE_URL")
+    with psycopg.connect(db_env["DATABASE_URL"]) as conn:
+        existing_urls = {
+            url_key(row[0])
+            for row in conn.execute("select url from listings where source = 'invaluable'").fetchall()
+        }
     mailbox = imaplib.IMAP4_SSL(
         env["IMAP_HOST"], int(os.environ.get("IMAP_PORT", "993"))
     )
@@ -310,6 +317,11 @@ def fetch(search: dict) -> list[Listing]:
             ):
                 continue
             for candidate in parse_message(message, search):
+                if url_key(candidate.url) in existing_urls:
+                    candidate.raw_data["enrichment_status"] = "skipped_existing"
+                    candidate.raw_data["enrichment_reason"] = "URL already exists in listings database"
+                    listings.append(candidate)
+                    continue
                 enriched = enrich_with_retry(
                     candidate, provider=search.get("enrichment_provider", "playwright")
                 )

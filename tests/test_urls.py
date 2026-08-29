@@ -1,4 +1,4 @@
-from listing_agent.urls import strip_query, strip_queries
+from listing_agent.urls import strip_query, strip_queries, url_key
 
 
 def test_strip_query_removes_everything_after_question_mark():
@@ -6,3 +6,4 @@ def test_strip_query_removes_everything_after_question_mark():
     assert strip_queries(["https://example.test/a?tracking=1", "", "https://example.test/b"]) == [
         "https://example.test/a", "https://example.test/b"
     ]
+    assert url_key(" HTTPS://EXAMPLE.TEST/item/?tracking=1 ") == "https://example.test/item"
