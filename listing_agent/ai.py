@@ -61,8 +61,8 @@ class OpenAIJudge:
             except (json.JSONDecodeError, TypeError):
                 if attempt == len(budgets) - 1:
                     logger.error(
-                        "OpenAI returned invalid JSON after %d attempts: model=%s finish_reason=%s content_chars=%d response_id=%s",
-                        len(budgets), self.model, finish_reason, len(content), payload.get("id", "unknown"),
+                        "OpenAI returned invalid JSON after %d attempts: model=%s finish_reason=%s content_chars=%d response_id=%s content=%r",
+                        len(budgets), self.model, finish_reason, len(content), payload.get("id", "unknown"), content[:2000],
                     )
                     raise RuntimeError(
                         f"OpenAI returned invalid JSON (finish_reason={finish_reason}, content_chars={len(content)}, "
