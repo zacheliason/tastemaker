@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -13,6 +14,7 @@ from .storage import SupabaseStorage
 
 
 MODEL = "gpt-5.6-luna"
+logger = logging.getLogger(__name__)
 
 
 class OpenAIJudge:
@@ -25,7 +27,8 @@ class OpenAIJudge:
     def complete(self, messages: list[dict[str, Any]]) -> Any:
         total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         retry_messages = list(messages)
-        for attempt in range(2):
+        budgets = [self.max_completion_tokens, max(self.max_completion_tokens * 2, 160), max(self.max_completion_tokens * 4, 320)]
+        for attempt, budget in enumerate(budgets):
             response = httpx.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
@@ -33,7 +36,7 @@ class OpenAIJudge:
                     "model": self.model,
                     "messages": retry_messages,
                     "response_format": {"type": "json_object"},
-                    "max_completion_tokens": self.max_completion_tokens if attempt == 0 else max(self.max_completion_tokens * 2, 160),
+                    "max_completion_tokens": budget,
                 },
                 timeout=120,
             )
@@ -45,15 +48,30 @@ class OpenAIJudge:
                 total_usage[key] += int(usage.get(key, 0))
             choice = (payload.get("choices") or [{}])[0]
             content = (choice.get("message") or {}).get("content") or ""
+            finish_reason = choice.get("finish_reason", "unknown")
+            logger.info(
+                "OpenAI completion attempt=%d model=%s finish_reason=%s prompt_tokens=%s completion_tokens=%s content_chars=%d response_id=%s",
+                attempt + 1, self.model, finish_reason, usage.get("prompt_tokens", 0),
+                usage.get("completion_tokens", 0), len(content), payload.get("id", "unknown"),
+            )
             try:
                 parsed = json.loads(content.strip())
                 self.last_usage = total_usage
                 return parsed
             except (json.JSONDecodeError, TypeError):
-                if attempt == 1:
-                    finish_reason = choice.get("finish_reason", "unknown")
-                    raise RuntimeError(f"OpenAI returned invalid JSON (finish_reason={finish_reason}, content={content[:200]!r})")
-                retry_messages = retry_messages + [{"role": "user", "content": "Return only the requested JSON object. No prose, markdown, or empty response."}]
+                if attempt == len(budgets) - 1:
+                    logger.error(
+                        "OpenAI returned invalid JSON after %d attempts: model=%s finish_reason=%s content_chars=%d response_id=%s",
+                        len(budgets), self.model, finish_reason, len(content), payload.get("id", "unknown"),
+                    )
+                    raise RuntimeError(
+                        f"OpenAI returned invalid JSON (finish_reason={finish_reason}, content_chars={len(content)}, "
+                        f"response_id={payload.get('id', 'unknown')})"
+                    )
+                retry_messages = list(messages) + [{
+                    "role": "user",
+                    "content": "Return only the requested JSON object. No prose, markdown, or empty response. Keep it compact.",
+                }]
 
 
 def _digest(value: Any) -> str:
@@ -63,18 +81,24 @@ def _digest(value: Any) -> str:
 def title_gate(judge: OpenAIJudge, listings: list[dict], searches: dict[str, dict], instructions: str | None = None) -> dict[str, dict]:
     if not listings:
         return {}
-    payload = [{
-        "external_id": row["external_id"],
-        "title": row["title"],
-        "description": row.get("description") or "",
-        "size_fields": row.get("size_fields") or {},
-        "search": row.get("search") or searches.get(row["search_id"], {}),
-    } for row in listings]
-    result = judge.complete([{
-        "role": "system",
-        "content": instructions or "Screen listings against their configured search. Return JSON object with key results, an array of objects containing external_id, pass (boolean), and reason (one sentence). Reject clear title/spec mismatches; do not invent missing facts.",
-    }, {"role": "user", "content": json.dumps(payload)}])
-    return {str(item["external_id"]): {"pass": bool(item.get("pass")), "reason": item.get("reason", "")} for item in result.get("results", [])}
+    batch_size = max(1, int(os.environ.get("OPENAI_TITLE_BATCH_SIZE", "5")))
+    results = {}
+    for start in range(0, len(listings), batch_size):
+        batch = listings[start:start + batch_size]
+        payload = [{
+            "external_id": row["external_id"],
+            "title": row["title"],
+            "description": row.get("description") or "",
+            "size_fields": row.get("size_fields") or {},
+            "search": row.get("search") or searches.get(row["search_id"], {}),
+        } for row in batch]
+        logger.info("OpenAI title gate batch=%d listings=%d", start // batch_size + 1, len(batch))
+        result = judge.complete([{
+            "role": "system",
+            "content": instructions or "Screen listings against their configured search. Return JSON object with key results, an array of objects containing external_id, pass (boolean), and reason (one sentence). Reject clear title/spec mismatches; do not invent missing facts.",
+        }, {"role": "user", "content": json.dumps(payload)}])
+        results.update({str(item["external_id"]): {"pass": bool(item.get("pass")), "reason": item.get("reason", "")} for item in result.get("results", [])})
+    return results
 
 
 def taste_judgment(judge: OpenAIJudge, listing: dict, references: list[dict], instructions: str | None = None) -> dict:

@@ -49,3 +49,27 @@ def test_openai_client_retries_empty_json(monkeypatch):
     judge = OpenAIJudge(api_key="test")
     assert judge.complete([{"role": "user", "content": "JSON"}]) == {"ok": True}
     assert judge.last_usage == {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}
+
+
+def test_openai_client_retries_length_truncation_with_larger_budget(monkeypatch):
+    class Response:
+        is_error = False
+
+        def __init__(self, content, finish_reason):
+            self.content = content
+            self.finish_reason = finish_reason
+
+        def json(self):
+            return {"id": "resp-test", "usage": {}, "choices": [{"message": {"content": self.content}, "finish_reason": self.finish_reason}]}
+
+    responses = iter([Response("", "length"), Response('{"ok": true}', "stop")])
+    budgets = []
+
+    def post(*args, **kwargs):
+        budgets.append(kwargs["json"]["max_completion_tokens"])
+        return next(responses)
+
+    monkeypatch.setattr("listing_agent.ai.httpx.post", post)
+    judge = OpenAIJudge(api_key="test", max_completion_tokens=80)
+    assert judge.complete([{"role": "user", "content": "JSON"}]) == {"ok": True}
+    assert budgets == [80, 160]
