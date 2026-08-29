@@ -119,7 +119,8 @@ def main() -> None:
         adapter = adapter_for(settings)
         if settings.get("account_saved_searches"):
             account_searches = adapter.saved_searches(settings.get("saved_search_defaults"))
-            searches = adapter.merge_searches(account_searches, enabled_searches(settings), settings.get("saved_search_defaults"))
+            # Account mode is authoritative; configured searches are not a fallback.
+            searches = account_searches
             logger.info("eBay effective saved searches: %d", len(searches))
             for search in searches:
                 logger.info(

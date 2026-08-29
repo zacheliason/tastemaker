@@ -78,8 +78,11 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
             image = row["image_urls"][0] if row["image_urls"] else ""
             image_source = (image_sources or {}).get(row["external_id"], image)
             image_html = f'<img src="{html.escape(image_source, quote=True)}" alt="Listing image" width="320" style="display:block;width:100%;max-width:320px;height:auto;max-height:240px;object-fit:contain"><br>' if image_source else ""
-            blocks.append(f'''<div style="margin:0 0 16px;padding:18px;background:#fffefa;border:1px solid #ddd6cc;border-radius:8px;box-shadow:0 2px 8px rgba(50,40,30,.04)">
-{image_html}<h3 style="margin:12px 0 6px;font-family:Georgia,'Times New Roman',serif;font-size:20px;font-weight:400;line-height:1.25"><a style="color:#252321;text-decoration:none" href="{html.escape(row['url'], quote=True)}">{html.escape(row['title'])}</a></h3>
+            filtered = section == "Filtered"
+            card_border = "#b85c52" if filtered else "#ddd6cc"
+            filtered_label = '<p style="margin:0 0 10px;color:#a14d45;font-size:10px;font-weight:700;letter-spacing:1.5px">FILTERED</p>' if filtered else ""
+            blocks.append(f'''<div style="margin:0 0 16px;padding:18px;background:#fffefa;border:1px solid {card_border};border-radius:8px;box-shadow:0 2px 8px rgba(50,40,30,.04)">
+ {image_html}{filtered_label}<h3 style="margin:12px 0 6px;font-family:Georgia,'Times New Roman',serif;font-size:20px;font-weight:400;line-height:1.25"><a style="color:#252321;text-decoration:none" href="{html.escape(row['url'], quote=True)}">{html.escape(row['title'])}</a></h3>
 <p style="margin:0 0 4px;font-size:13px;color:#514b45">{html.escape(_price(row['price'], row['currency'], row['price_usd']))}</p>
 {f'<p style="margin:0 0 10px;font-size:12px;color:#8a8177;letter-spacing:.2px">{html.escape(remaining)}</p>' if remaining else ''}
 <p style="margin:0 0 16px;font-size:14px;color:#514b45">{html.escape(reason)}</p>

@@ -95,6 +95,7 @@ Within each source’s `searches` array, edit:
 
 - eBay uses the official Browse API; eBay pages are not scraped.
 - Set `account_saved_searches` to `true` to retrieve the authenticated eBay buyer's Saved Searches through `GetMyeBayBuying`; this requires `EBAY_REFRESH_TOKEN`.
+- When `account_saved_searches` is enabled, the account's saved searches are the complete eBay search set; entries in that source's `searches` array are ignored.
 - Invaluable uses listing-alert emails from the configured inbox.
 - `max_price_usd` and `required_size_fields` are deterministic filters applied before LLM calls.
 - `limit` is the maximum number of source results ingested; `max_price_usd` is the price threshold. They are not duplicates.

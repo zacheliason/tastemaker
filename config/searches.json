@@ -2,7 +2,7 @@
   "default_enrichment_source": "invaluable",
   "sources": {
     "ebay": {
-      "enabled": false,
+      "enabled": true,
       "adapter": "ebay",
       "account_saved_searches": true,
       "searches": [

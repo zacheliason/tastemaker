@@ -64,6 +64,7 @@ def test_render_marks_filtered_section():
         "title_reason": None, "taste_verdict": "filtered"
     }], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc))
     assert "FILTERED" in markup
+    assert "border:1px solid #b85c52" in markup
     assert "price exceeds limit" in markup
 
 

@@ -24,10 +24,6 @@ def _parse_end_date(value: str | None) -> datetime | None:
         return None
 
 
-def _normalized_query(value: str) -> str:
-    return " ".join(value.lower().split())
-
-
 def _access_token() -> str:
     env = required_env("EBAY_CLIENT_ID", "EBAY_CLIENT_SECRET")
     refresh_token = __import__("os").environ.get("EBAY_REFRESH_TOKEN")
@@ -86,13 +82,13 @@ def saved_searches(defaults: dict | None = None) -> list[dict]:
         except (InvalidOperation, ValueError):
             price_max = None
         output.append({
+            **(defaults or {}),
             "id": "ebay-saved-" + (value("SearchName") or query).lower().replace(" ", "-")[:80],
             "query": query,
             "limit": 100,
             "max_price_usd": price_max,
             "category_ids": [value("CategoryID")] if value("CategoryID") else [],
             "exclude_keywords": [],
-            **(defaults or {}),
         })
     logger.info("eBay saved searches imported: %d", len(output))
     for search in output:
@@ -101,28 +97,6 @@ def saved_searches(defaults: dict | None = None) -> list[dict]:
             search["id"], search["query"], search.get("category"), search.get("max_price_usd"),
         )
     return output
-
-
-def merge_searches(account_searches: list[dict], configured_searches: list[dict],
-                   defaults: dict | None = None) -> list[dict]:
-    """Apply committed search policy to account searches without losing either set."""
-    configured_by_query = {
-        _normalized_query(item.get("query", "")): item
-        for item in configured_searches if item.get("query")
-    }
-    merged = []
-    seen = set()
-    for account in account_searches:
-        policy = configured_by_query.get(_normalized_query(account.get("query", "")), {})
-        item = {**(defaults or {}), **account, **policy}
-        if not item.get("enabled", True) or item["id"] in seen:
-            continue
-        seen.add(item["id"])
-        merged.append(item)
-    for item in configured_searches:
-        if item.get("enabled", True) and item.get("id") not in seen:
-            merged.append(item)
-    return merged
 
 
 def fetch(search: dict) -> list[Listing]:
