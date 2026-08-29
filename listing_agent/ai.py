@@ -85,6 +85,27 @@ def title_gate(judge: OpenAIJudge, listings: list[dict], searches: dict[str, dic
     results = {}
     for start in range(0, len(listings), batch_size):
         batch = listings[start:start + batch_size]
+        try:
+            batch_results = _title_gate_batch(judge, batch, searches, instructions, start // batch_size + 1)
+        except RuntimeError as exc:
+            if len(batch) > 1:
+                logger.warning("OpenAI title gate batch failed; retrying %d listings individually: %s", len(batch), exc)
+                batch_results = {}
+                for row in batch:
+                    try:
+                        batch_results.update(_title_gate_batch(judge, [row], searches, instructions, row["external_id"]))
+                    except RuntimeError as item_exc:
+                        logger.error("OpenAI title gate failed for one listing; treating as rejected: external_id=%s error=%s", row["external_id"], item_exc)
+            else:
+                logger.error("OpenAI title gate failed; treating listing as rejected: external_id=%s error=%s", batch[0]["external_id"], exc)
+                batch_results = {}
+        results.update(batch_results)
+    return results
+
+
+def _title_gate_batch(judge: OpenAIJudge, batch: list[dict], searches: dict[str, dict],
+                      instructions: str | None, batch_label: int | str) -> dict[str, dict]:
+        """Run one title batch; callers decide whether a failed batch is recoverable."""
         payload = [{
             "external_id": row["external_id"],
             "title": row["title"],
@@ -92,13 +113,12 @@ def title_gate(judge: OpenAIJudge, listings: list[dict], searches: dict[str, dic
             "size_fields": row.get("size_fields") or {},
             "search": row.get("search") or searches.get(row["search_id"], {}),
         } for row in batch]
-        logger.info("OpenAI title gate batch=%d listings=%d", start // batch_size + 1, len(batch))
+        logger.info("OpenAI title gate batch=%s listings=%d", batch_label, len(batch))
         result = judge.complete([{
             "role": "system",
             "content": instructions or "Screen listings against their configured search. Return JSON object with key results, an array of objects containing external_id, pass (boolean), and reason (one sentence). Reject clear title/spec mismatches; do not invent missing facts.",
         }, {"role": "user", "content": json.dumps(payload)}])
-        results.update({str(item["external_id"]): {"pass": bool(item.get("pass")), "reason": item.get("reason", "")} for item in result.get("results", [])})
-    return results
+        return {str(item["external_id"]): {"pass": bool(item.get("pass")), "reason": item.get("reason", "")} for item in result.get("results", [])}
 
 
 def taste_judgment(judge: OpenAIJudge, listing: dict, references: list[dict], instructions: str | None = None) -> dict:
@@ -110,7 +130,11 @@ def taste_judgment(judge: OpenAIJudge, listing: dict, references: list[dict], in
         content.append({"type": "image_url", "image_url": {"url": image_url, "detail": "low"}})
     for reference in references:
         content.append({"type": "image_url", "image_url": {"url": reference["url"], "detail": "low"}})
-    result = judge.complete([{"role": "user", "content": content}])
+    try:
+        result = judge.complete([{"role": "user", "content": content}])
+    except RuntimeError as exc:
+        logger.error("OpenAI taste judgment failed; treating listing as uncertain: error=%s", exc)
+        return {"verdict": "uncertain", "reason": "AI judgment unavailable."}
     verdict = result.get("verdict", "uncertain")
     if verdict not in {"like", "dislike", "uncertain"}:
         verdict = "uncertain"
