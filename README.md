@@ -14,6 +14,7 @@ Create or obtain:
 - Gmail IMAP access with a Google App Password
 - eBay developer application credentials
 - A FreeCurrencyAPI key
+- An authorized ZenRows API key for remote Invaluable enrichment
 
 ### 2. Add GitHub Actions secrets
 
@@ -24,6 +25,7 @@ DATABASE_URL
 OPENAI_API_KEY
 SUPABASE_URL
 SUPABASE_SERVICE_ROLE_KEY
+ZENROWS_API_KEY
 EBAY_CLIENT_ID
 EBAY_CLIENT_SECRET
 EBAY_MARKETPLACE_ID
@@ -93,6 +95,7 @@ Within each source’s `searches` array, edit:
 - Invaluable uses listing-alert emails from the configured inbox.
 - `max_price_usd` and `required_size_fields` are deterministic filters applied before LLM calls.
 - `category` must be `art`, `home_decor`, or `clothing` and selects the matching reference pool.
+- `enrichment_provider` selects the configured page-fetch adapter, such as `playwright` or authorized `zenrows`.
 - Set `enabled` to `false` to pause a search.
 
 Example Invaluable price limit:

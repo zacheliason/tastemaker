@@ -4,9 +4,8 @@
   "pre_llm_policy": {
     "invaluable": {
       "fast_track_subject_contains": [
-        "Josef Albers",
-        "Sabra Field",
-        "Sabra Johnson Field"
+        "Albers",
+        "Sabra"
       ]
     }
   },

@@ -1,6 +1,7 @@
 import json
 import os
 from .models import Listing
+from .urls import strip_queries, strip_query
 
 
 def save(listings: list[Listing]) -> int:
@@ -11,6 +12,8 @@ def save(listings: list[Listing]) -> int:
     with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
         with conn.cursor() as cur:
             for item in listings:
+                item.url = strip_query(item.url)
+                item.image_urls = strip_queries(item.image_urls)
                 existing = cur.execute(
                     "select external_id from listings where source = %s and lower(url) = lower(%s) and external_id <> %s",
                     (item.source, item.url, item.external_id),

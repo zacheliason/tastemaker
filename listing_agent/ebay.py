@@ -4,6 +4,7 @@ from datetime import datetime
 from .config import required_env
 from .models import Listing
 from .pricing import parse_price, to_usd
+from .urls import strip_query
 
 
 def fetch(search: dict) -> list[Listing]:
@@ -28,14 +29,14 @@ def fetch(search: dict) -> list[Listing]:
     listings = []
     for item in result.get("itemSummaries", []):
         price = item.get("price") or {}
-        image = item.get("image", {}).get("imageUrl")
+        image = strip_query(item.get("image", {}).get("imageUrl"))
         amount, currency = parse_price(price.get("value"), price.get("currency"))
         end_at = item.get("itemEndDate") or item.get("endDate")
         sale_end_at = datetime.fromisoformat(end_at.replace("Z", "+00:00")) if end_at else None
         listings.append(Listing(
             source="ebay", search_id=search["id"], external_id=item["itemId"],
             title=item.get("title", ""), price=amount,
-            currency=currency, price_usd=to_usd(amount, currency), url=item.get("itemWebUrl", ""),
+            currency=currency, price_usd=to_usd(amount, currency), url=strip_query(item.get("itemWebUrl", "")),
             image_urls=[image] if image else [], description=item.get("shortDescription", ""),
             raw_data=item, sale_end_at=sale_end_at,
         ))

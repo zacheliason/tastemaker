@@ -110,7 +110,7 @@ def main() -> None:
         fetcher = adapter_for(settings).fetch
         source_total = 0
         for search in enabled_searches(settings):
-            items = fetcher(search)
+            items = fetcher({**search, "enrichment_provider": settings.get("enrichment_provider", "playwright")})
             if not items:
                 raise RuntimeError(f"{source} search {search['id']} returned zero items; refusing to continue silently")
             source_total += save(items)
