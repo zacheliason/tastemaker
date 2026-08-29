@@ -56,6 +56,17 @@ def test_render_empty_digest():
     assert "No matching listings." in markup
 
 
+def test_render_marks_filtered_section():
+    _, markup = render([{
+        "section": "Filtered", "source": "invaluable", "external_id": "filtered-1", "title": "Expensive lot",
+        "price": "1000.00", "currency": "USD", "price_usd": "1000.00", "url": "https://example.test/item",
+        "image_urls": [], "filter_reason": "price exceeds limit", "taste_reason": None,
+        "title_reason": None, "taste_verdict": "filtered"
+    }], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc))
+    assert "FILTERED" in markup
+    assert "price exceeds limit" in markup
+
+
 def test_empty_digest_is_not_delivered():
     class Connection:
         def execute(self, query, params):

@@ -62,6 +62,7 @@ The workflow uses these committed files:
 
 - `config/searches.json`: saved searches, price limits, required sizes, exclusions, and categories
 - `config/ai.json`: model, title-gate instructions, taste instructions, output budget, and LLM bypass rules
+- `config/digest.json`: whether the verification digest includes filtered listings
 - `db/schema.sql`: idempotent Postgres schema and migrations
 - `.github/workflows/daily-listings.yml`: schedule and pipeline steps
 
@@ -94,6 +95,7 @@ Within each source’s `searches` array, edit:
 - eBay uses the official Browse API; eBay pages are not scraped.
 - Invaluable uses listing-alert emails from the configured inbox.
 - `max_price_usd` and `required_size_fields` are deterministic filters applied before LLM calls.
+- `limit` is the maximum number of source results ingested; `max_price_usd` is the price threshold. They are not duplicates.
 - `category` must be `art`, `home_decor`, or `clothing` and selects the matching reference pool.
 - `enrichment_provider` selects the configured page-fetch adapter, such as `playwright` or authorized `zenrows`.
 - Set `enabled` to `false` to pause a search.
@@ -167,6 +169,8 @@ order by fetched_at desc;
 ## Digest And Feedback
 
 The digest is sent to `DIGEST_TO`, grouped by source, and includes USD price, sale timing when available, listing image, URL, concise reasoning, and an LLM usage footer showing prompt, completion, and total tokens. Listing images are fetched transiently by the runner and embedded in the email; they are not retained in Supabase Storage. Fast-tracked digests report zero usage.
+
+Set `include_filtered` in `config/digest.json` to `true` while validating the service. Passed listings appear first; filtered listings appear in a clearly marked section with the same feedback controls. Set it to `false` after validation. A digest is never sent unless at least one listing passes filtering.
 
 Like and Dislike buttons create pre-addressed replies to `IMAP_USERNAME`. Their subjects and bodies identify the listing so a later workflow can add feedback to the correct category pool.
 

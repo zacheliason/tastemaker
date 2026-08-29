@@ -53,7 +53,7 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
     feedback_recipient = feedback_recipient or recipient
     grouped = {}
     for row in rows:
-        grouped.setdefault(row["source"], []).append(row)
+        grouped.setdefault((row.get("section", "Passed"), row["source"]), []).append(row)
     subject = f"Daily listing digest: {len(rows)} match{'es' if len(rows) != 1 else ''}"
     text = [subject, f"Since {start.isoformat()}", ""]
     pretty_start = _pretty_date(start)
@@ -62,12 +62,12 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
 <p style="margin:0 0 8px;color:#8a8177;font-size:11px;letter-spacing:2px;text-transform:uppercase">Daily selection</p>
 <h1 style="margin:0;font-family:Georgia,'Times New Roman',serif;font-size:30px;font-weight:400;letter-spacing:-.5px">{html.escape(subject)}</h1>
 <p style="margin:8px 0 28px;color:#756d65;font-size:13px">Since {html.escape(pretty_start)}</p>''']
-    for source, items in sorted(grouped.items()):
-        text.append(source.title())
-        text.append("=" * len(source))
-        blocks.append(f'<h2 style="margin:28px 0 12px;padding-bottom:8px;border-bottom:1px solid #d8d1c7;font-size:12px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#756d65">{html.escape(source.title())}</h2>')
+    for (section, source), items in sorted(grouped.items(), key=lambda item: (item[0][0] != "Passed", item[0][1])):
+        text.extend([section.upper(), source.title(), "=" * len(source)])
+        section_color = "#756d65" if section == "Passed" else "#9b5148"
+        blocks.append(f'<h2 style="margin:28px 0 12px;padding-bottom:8px;border-bottom:1px solid #d8d1c7;font-size:12px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:{section_color}">{html.escape(section.upper())} · {html.escape(source.title())}</h2>')
         for row in items:
-            reason = row["taste_reason"] or row["title_reason"] or "Matched configured search"
+            reason = row.get("filter_reason") or row.get("taste_reason") or row.get("title_reason") or "Matched configured search"
             like = _feedback_link(feedback_recipient, "like", row["source"], row["external_id"], row["title"])
             dislike = _feedback_link(feedback_recipient, "dislike", row["source"], row["external_id"], row["title"])
             remaining = _remaining(row.get("sale_end_at"))
@@ -96,14 +96,21 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
     return "\n".join(text), "".join(blocks)
 
 
-def fetch_rows(conn, start: datetime) -> list[dict]:
+def fetch_rows(conn, start: datetime, include_filtered: bool = False) -> list[dict]:
     rows = conn.execute("""select l.source, l.external_id, l.title, l.price, l.currency, l.price_usd,
-        l.url, l.image_urls, l.sale_end_at, j.title_reason, j.taste_verdict, j.taste_reason
-        from listings l join ai_judgments j on j.listing_id = l.id
-        where l.filter_status = 'passed' and j.title_pass = true and j.taste_verdict in ('like', 'uncertain') and j.judged_at >= %s
-        order by l.source, j.taste_verdict, j.judged_at desc""", (start,)).fetchall()
-    keys = ("source", "external_id", "title", "price", "currency", "price_usd", "url", "image_urls", "sale_end_at", "title_reason", "taste_verdict", "taste_reason")
-    return [dict(zip(keys, row)) for row in rows]
+        l.url, l.image_urls, l.sale_end_at, l.filter_status, l.filter_reason,
+        j.title_reason, j.title_pass, j.taste_verdict, j.taste_reason
+        from listings l left join ai_judgments j on j.listing_id = l.id
+        where l.fetched_at >= %s and ((l.filter_status = 'passed' and j.title_pass = true and j.taste_verdict in ('like', 'uncertain'))
+          or (%s and l.filter_status = 'filtered'))
+        order by l.filter_status, l.source, l.fetched_at desc""", (start, include_filtered)).fetchall()
+    keys = ("source", "external_id", "title", "price", "currency", "price_usd", "url", "image_urls", "sale_end_at", "filter_status", "filter_reason", "title_reason", "title_pass", "taste_verdict", "taste_reason")
+    output = [dict(zip(keys, row)) for row in rows]
+    for row in output:
+        row["section"] = "Passed" if row["filter_status"] == "passed" else "Filtered"
+        if row["section"] == "Filtered":
+            row["taste_verdict"] = "filtered"
+    return output
 
 
 def fetch_usage(conn, start: datetime) -> dict:
@@ -145,9 +152,10 @@ def send(message: EmailMessage, host: str, port: int, username: str, password: s
             smtp.send_message(message)
 
 
-def deliver(conn, start: datetime, recipient: str, dry_run: bool = False) -> int:
-    rows = fetch_rows(conn, start)
-    if not rows and not dry_run:
+def deliver(conn, start: datetime, recipient: str, dry_run: bool = False, include_filtered: bool = False) -> int:
+    rows = fetch_rows(conn, start, include_filtered)
+    passed_count = sum(row["section"] == "Passed" for row in rows)
+    if not passed_count and not dry_run:
         return 0
     feedback_recipient = os.environ.get("IMAP_USERNAME") or recipient
     image_sources, attachments = download_images(rows) if not dry_run else ({}, [])

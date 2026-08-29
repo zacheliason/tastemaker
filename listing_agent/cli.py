@@ -12,6 +12,7 @@ def main() -> None:
     parser.add_argument("command", choices=["ingest", "filter", "import-references", "upload-references", "judge", "digest", "enrich-url"])
     parser.add_argument("--config", default="config/searches.json")
     parser.add_argument("--ai-config", default="config/ai.json")
+    parser.add_argument("--digest-config", default="config/digest.json")
     parser.add_argument("--source", help="configured source name")
     parser.add_argument("--url")
     parser.add_argument("--search-id")
@@ -90,12 +91,13 @@ def main() -> None:
         import os
         import psycopg
         from .digest import deliver, default_start
+        digest_config = json.loads(Path(args.digest_config).read_text())
         recipient = args.recipient or os.environ.get("DIGEST_TO")
         if not recipient:
             parser.error("digest requires --to or DIGEST_TO")
         start = datetime.fromisoformat(args.since) if args.since else default_start()
         with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
-            count = deliver(conn, start, recipient, args.dry_run)
+            count = deliver(conn, start, recipient, args.dry_run, digest_config.get("include_filtered", False))
         status = "rendered" if args.dry_run else ("sent" if count else "not sent; no passing listings")
         print(f"digest {status}: {count} listings")
         return
