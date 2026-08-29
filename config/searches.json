@@ -4,6 +4,7 @@
     "ebay": {
       "enabled": false,
       "adapter": "ebay",
+      "account_saved_searches": true,
       "searches": [
         {
           "id": "ebay-rl-cream-pleated-trousers-w30",

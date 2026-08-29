@@ -20,6 +20,7 @@ jobs:
       ZENROWS_API_KEY: ${{ secrets.ZENROWS_API_KEY }}
       EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
       EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
+      EBAY_REFRESH_TOKEN: ${{ secrets.EBAY_REFRESH_TOKEN }}
       EBAY_MARKETPLACE_ID: ${{ secrets.EBAY_MARKETPLACE_ID }}
       IMAP_HOST: ${{ secrets.IMAP_HOST }}
       IMAP_PORT: ${{ secrets.IMAP_PORT }}

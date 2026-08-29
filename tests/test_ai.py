@@ -32,3 +32,20 @@ def test_taste_judgment_normalizes_invalid_verdict():
     assert [item["image_url"]["url"] for item in content if item["type"] == "image_url"] == [
         "https://example.test/listing.jpg", "https://example.test/ref.jpg"
     ]
+
+
+def test_openai_client_retries_empty_json(monkeypatch):
+    class Response:
+        is_error = False
+
+        def __init__(self, content):
+            self.content = content
+
+        def json(self):
+            return {"usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}, "choices": [{"message": {"content": self.content}, "finish_reason": "stop"}]}
+
+    responses = iter([Response(""), Response('{"ok": true}')])
+    monkeypatch.setattr("listing_agent.ai.httpx.post", lambda *args, **kwargs: next(responses))
+    judge = OpenAIJudge(api_key="test")
+    assert judge.complete([{"role": "user", "content": "JSON"}]) == {"ok": True}
+    assert judge.last_usage == {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}

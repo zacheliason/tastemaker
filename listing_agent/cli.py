@@ -1,10 +1,15 @@
 import argparse
 import asyncio
 import json
+import logging
 from pathlib import Path
 from datetime import datetime
 from .config import adapter_for, configured_sources, enabled_searches, load_searches
 from .db import save
+
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -111,7 +116,19 @@ def main() -> None:
             continue
         fetcher = adapter_for(settings).fetch
         source_total = 0
-        for search in enabled_searches(settings):
+        adapter = adapter_for(settings)
+        if settings.get("account_saved_searches"):
+            account_searches = adapter.saved_searches(settings.get("saved_search_defaults"))
+            searches = adapter.merge_searches(account_searches, enabled_searches(settings), settings.get("saved_search_defaults"))
+            logger.info("eBay effective saved searches: %d", len(searches))
+            for search in searches:
+                logger.info(
+                    "eBay effective search: id=%s query=%r category=%s max_price_usd=%s",
+                    search["id"], search["query"], search.get("category"), search.get("max_price_usd"),
+                )
+        else:
+            searches = enabled_searches(settings)
+        for search in searches:
             items = fetcher({**search, "enrichment_provider": settings.get("enrichment_provider", "playwright")})
             if not items:
                 raise RuntimeError(f"{source} search {search['id']} returned zero items; refusing to continue silently")

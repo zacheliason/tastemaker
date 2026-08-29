@@ -23,24 +23,37 @@ class OpenAIJudge:
         self.last_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     def complete(self, messages: list[dict[str, Any]]) -> Any:
-        response = httpx.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-            json={
-                "model": self.model,
-                "messages": messages,
-                "response_format": {"type": "json_object"},
-                "max_completion_tokens": self.max_completion_tokens,
-            },
-            timeout=120,
-        )
-        if response.is_error:
-            raise RuntimeError(f"OpenAI request failed ({response.status_code}): {response.text[:500]}")
-        payload = response.json()
-        usage = payload.get("usage") or {}
-        self.last_usage = {key: int(usage.get(key, 0)) for key in ("prompt_tokens", "completion_tokens", "total_tokens")}
-        content = payload["choices"][0]["message"]["content"]
-        return json.loads(content)
+        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        retry_messages = list(messages)
+        for attempt in range(2):
+            response = httpx.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": self.model,
+                    "messages": retry_messages,
+                    "response_format": {"type": "json_object"},
+                    "max_completion_tokens": self.max_completion_tokens if attempt == 0 else max(self.max_completion_tokens * 2, 160),
+                },
+                timeout=120,
+            )
+            if response.is_error:
+                raise RuntimeError(f"OpenAI request failed ({response.status_code}): {response.text[:500]}")
+            payload = response.json()
+            usage = payload.get("usage") or {}
+            for key in total_usage:
+                total_usage[key] += int(usage.get(key, 0))
+            choice = (payload.get("choices") or [{}])[0]
+            content = (choice.get("message") or {}).get("content") or ""
+            try:
+                parsed = json.loads(content.strip())
+                self.last_usage = total_usage
+                return parsed
+            except (json.JSONDecodeError, TypeError):
+                if attempt == 1:
+                    finish_reason = choice.get("finish_reason", "unknown")
+                    raise RuntimeError(f"OpenAI returned invalid JSON (finish_reason={finish_reason}, content={content[:200]!r})")
+                retry_messages = retry_messages + [{"role": "user", "content": "Return only the requested JSON object. No prose, markdown, or empty response."}]
 
 
 def _digest(value: Any) -> str:
@@ -55,7 +68,7 @@ def title_gate(judge: OpenAIJudge, listings: list[dict], searches: dict[str, dic
         "title": row["title"],
         "description": row.get("description") or "",
         "size_fields": row.get("size_fields") or {},
-        "search": searches.get(row["search_id"], {}),
+        "search": row.get("search") or searches.get(row["search_id"], {}),
     } for row in listings]
     result = judge.complete([{
         "role": "system",
@@ -91,7 +104,7 @@ def run_with_config(conn, config: dict, ai_config: dict, source: str | None = No
     source_clause = "" if source is None else " and source = %s"
     params = () if source is None else (source,)
     rows = conn.execute("select id, source, search_id, external_id, title, description, size_fields, image_urls, raw_data from listings where filter_status = 'passed'" + source_clause, params).fetchall()
-    listings = [{"id": r[0], "source": r[1], "search_id": r[2], "external_id": r[3], "title": r[4], "description": r[5], "size_fields": r[6] or {}, "image_urls": r[7] or [], "raw_data": r[8] or {}} for r in rows]
+    listings = [{"id": r[0], "source": r[1], "search_id": r[2], "external_id": r[3], "title": r[4], "description": r[5], "size_fields": r[6] or {}, "image_urls": r[7] or [], "raw_data": r[8] or {}, "search": (r[8] or {}).get("_search_config", {})} for r in rows]
     search_map = {item["id"]: item for _, settings in configured_sources(config) for item in enabled_searches(settings)}
     llm_listings = [listing for listing in listings if not is_fast_tracked(listing, ai_config)]
     judge = OpenAIJudge(model=ai_config.get("model", MODEL), max_completion_tokens=ai_config.get("max_completion_tokens", 80)) if llm_listings else None

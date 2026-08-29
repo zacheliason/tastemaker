@@ -14,8 +14,11 @@ def evaluate(row: dict, search: dict) -> tuple[str, str | None]:
         return "filtered", f"excluded keyword: {found}"
 
     max_price = search.get("max_price_usd")
-    if max_price is not None and row.get("price_usd") is not None and row["price_usd"] > max_price:
-        return "filtered", f"price_usd {row['price_usd']} exceeds max_price_usd {max_price}"
+    if max_price is not None:
+        if row.get("price_usd") is None:
+            return "filtered", "missing price_usd with maximum price configured"
+        if row["price_usd"] > max_price:
+            return "filtered", f"price_usd {row['price_usd']} exceeds max_price_usd {max_price}"
 
     for field, expected in search.get("required_size_fields", {}).items():
         actual = (row.get("size_fields") or {}).get(field)
@@ -32,12 +35,13 @@ def apply(conn, searches: dict, source: str | None = None) -> dict[str, dict[str
         if current_source not in configured:
             continue
         source_searches = {item["id"]: item for item in enabled_searches(configured[current_source])}
-        rows = conn.execute("select id, search_id, title, description, price_usd, size_fields from listings where source = %s", (current_source,)).fetchall()
+        rows = conn.execute("select id, search_id, title, description, price_usd, size_fields, raw_data from listings where source = %s", (current_source,)).fetchall()
         before = len(rows)
         passed = filtered = 0
         for row in rows:
             data = {"title": row[2], "description": row[3], "price_usd": row[4], "size_fields": row[5]}
-            status, reason = evaluate(data, source_searches.get(row[1], {}))
+            search = source_searches.get(row[1]) or (row[6] or {}).get("_search_config", {})
+            status, reason = evaluate(data, search)
             if status == "passed":
                 passed += 1
             else:

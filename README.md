@@ -28,6 +28,7 @@ SUPABASE_SERVICE_ROLE_KEY
 ZENROWS_API_KEY
 EBAY_CLIENT_ID
 EBAY_CLIENT_SECRET
+EBAY_REFRESH_TOKEN
 EBAY_MARKETPLACE_ID
 IMAP_HOST
 IMAP_PORT
@@ -93,6 +94,7 @@ To add a source, add one registry entry and its adapter module under `listing_ag
 Within each source’s `searches` array, edit:
 
 - eBay uses the official Browse API; eBay pages are not scraped.
+- Set `account_saved_searches` to `true` to retrieve the authenticated eBay buyer's Saved Searches through `GetMyeBayBuying`; this requires `EBAY_REFRESH_TOKEN`.
 - Invaluable uses listing-alert emails from the configured inbox.
 - `max_price_usd` and `required_size_fields` are deterministic filters applied before LLM calls.
 - `limit` is the maximum number of source results ingested; `max_price_usd` is the price threshold. They are not duplicates.
