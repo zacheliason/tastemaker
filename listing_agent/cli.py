@@ -23,6 +23,7 @@ def main() -> None:
     parser.add_argument("--search-id")
     parser.add_argument("--directory")
     parser.add_argument("--bucket", default="taste-references")
+    parser.add_argument("--label", choices=["like", "dislike"], default="like", help="label for imported taste references")
     parser.add_argument("--to", dest="recipient")
     parser.add_argument("--since")
     parser.add_argument("--dry-run", action="store_true")
@@ -67,7 +68,7 @@ def main() -> None:
         if not args.directory:
             parser.error("import-references requires --directory")
         with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
-            count = import_directory(conn, args.directory)
+            count = import_directory(conn, args.directory, args.label)
         print(f"references imported: {count}")
         return
     if args.command == "upload-references":
@@ -90,7 +91,7 @@ def main() -> None:
         ai_config = json.loads(Path(args.ai_config).read_text())
         with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
             count = run_with_config(conn, config, ai_config, args.source)
-        print(f"AI judgments written: {count}")
+            print(f"AI judgments upserted: {count}")
         return
     if args.command == "digest":
         import os

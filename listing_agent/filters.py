@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 from .config import configured_sources, enabled_searches
+
+
+logger = logging.getLogger(__name__)
 
 
 def evaluate(row: dict, search: dict) -> tuple[str, str | None]:
@@ -48,6 +52,10 @@ def apply(conn, searches: dict, source: str | None = None) -> dict[str, dict[str
                 passed += 1
             else:
                 filtered += 1
+            logger.info(
+                "deterministic filter: source=%s search_id=%s listing_id=%s status=%s reason=%r",
+                current_source, row[1], row[0], status, reason,
+            )
             conn.execute("update listings set filter_status = %s, filter_reason = %s, filtered_at = %s where id = %s", (status, reason, datetime.now(timezone.utc) if reason else None, row[0]))
         summary[current_source] = {"before": before, "passed": passed, "filtered": filtered}
     return summary

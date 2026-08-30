@@ -1,6 +1,32 @@
 # Daily Listing Taste-Filter Agent
 
-This project runs as a scheduled GitHub Actions workflow. The workflow installs its own dependencies, reads GitHub Actions secrets, ingests listings, applies deterministic filters, uses OpenAI only where configured, and sends a digest when qualifying listings exist.
+This project runs as a scheduled GitHub Actions workflow. It ingests listings, applies deterministic filters, uses OpenAI only for title/spec screening, classifies visual taste locally with CLIP embeddings and a small category-specific logistic-regression model, and sends a digest when qualifying listings exist.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    sources["eBay Browse API\nInvaluable email / enrichment"] --> ingest["Ingest and normalize"]
+    ingest --> listings[("listings")]
+    listings --> rules["Deterministic filters\nprice, keywords, size"]
+    rules -->|passed| title["OpenAI title/spec gate\nbatched, optional fast-track"]
+    title -->|category| candidate["Listing image"]
+    candidate --> embed["CLIP image embedding"]
+    refs["Labeled reference images\nlike / dislike"] --> storage[("Supabase Storage")]
+    refs --> refdb[("taste_references\nembeddings + labels")]
+    storage --> embedrefs["CLIP reference embeddings"]
+    embedrefs --> refdb
+    refdb --> train["Fit category-specific\nlogistic classifier"]
+    train --> taste["Local taste prediction\nlike / dislike / uncertain"]
+    embed --> taste
+    title --> judgments[("ai_judgments")]
+    taste --> judgments
+    judgments --> digest["Digest email"]
+    digest --> feedback["User Like / Dislike feedback"]
+    feedback -->|manual import / future IMAP ingestion| refs
+```
+
+The title gate is the only model step that consumes LLM tokens. Visual taste prediction does not send listing or reference images to OpenAI: CLIP converts images to vectors, and the local classifier learns the user's preference boundary from those vectors. Classifiers are refit from all active labels on each run, so new feedback changes subsequent predictions without LLM fine-tuning.
 
 ## Remote Setup
 
@@ -62,7 +88,7 @@ Never put secret values in workflow YAML or committed configuration files.
 The workflow uses these committed files:
 
 - `config/searches.json`: saved searches, price limits, required sizes, exclusions, and categories
-- `config/ai.json`: model, title-gate instructions, taste instructions, output budget, and LLM bypass rules
+- `config/ai.json`: title-gate model/instructions, output budget, and LLM bypass rules; legacy taste settings are retained for compatibility
 - `config/digest.json`: whether the verification digest includes filtered listings
 - `db/schema.sql`: idempotent Postgres schema and migrations
 - `.github/workflows/daily-listings.yml`: schedule and pipeline steps
@@ -100,6 +126,7 @@ Within each source’s `searches` array, edit:
 - When `account_saved_searches` is enabled, the account's saved searches are the complete eBay search set; entries in that source's `searches` array are ignored.
 - Invaluable uses listing-alert emails from the configured inbox.
 - `max_price_usd` and `required_size_fields` are deterministic filters applied before LLM calls.
+- Deterministic outcomes are stored in `listings.filter_reason`; AI title and taste outcomes are stored separately in `ai_judgments.title_reason` and `ai_judgments.taste_reason`.
 - `limit` is the maximum number of source results ingested; `max_price_usd` is the price threshold. They are not duplicates.
 - eBay listings are only inserted once, using the stable eBay item ID or normalized listing URL; previously seen items are not refreshed into the daily digest.
 - `category` must be `art`, `home_decor`, or `clothing` and selects the matching reference pool.
@@ -116,15 +143,16 @@ Example Invaluable price limit:
 
 Edit `config/ai.json`.
 
-- `model`: model used for both title/spec and image judgments
+- `model`: model used for title/spec screening; visual taste is classified locally from CLIP embeddings
 - `title_gate.instructions`: title and structured-spec screening prompt
-- `taste_judgment.instructions`: category-specific visual comparison prompt
+- `taste_judgment.instructions`: retained for configuration compatibility; visual taste no longer spends LLM tokens
 - `max_completion_tokens`: output budget
-- `reference_limit`: maximum number of same-category reference images sent to each taste judgment; references are loaded and signed once per category per run.
-- `reference_pool_limit`: maximum number of same-category references considered by the CLIP nearest-neighbor selector. Reference embeddings are persisted in `taste_references` and generated only once.
+- `reference_limit` and `reference_pool_limit`: retained for compatibility with older nearest-reference runs; the classifier trains on every active labeled reference in the category.
 - `pre_llm_policy`: deterministic bypass rules
 
-Fast-track matching Invaluable email subjects are accepted without any OpenAI call. eBay and unmatched generic Invaluable subjects use the LLM path.
+Fast-track matching Invaluable email subjects are accepted without any OpenAI call. eBay and unmatched generic Invaluable subjects use the LLM title/spec gate, then local CLIP logistic regression handles taste.
+
+Import additional feedback with `python -m listing_agent.cli import-references --directory <dir> --label like` or `--label dislike`. The directory must contain the existing category folders (`pinterest_art`, `pinterest_clothes`, or `pinterest_home_decor`). Embeddings are persisted in `taste_references`; each judgment run refits the small category-specific classifier from all active labels, so new feedback is incorporated automatically.
 
 Example:
 
@@ -140,9 +168,9 @@ Keep the fast-track list limited to searches that are safe to accept without tit
 
 ## Reference Images
 
-Reference images live in the private Supabase Storage bucket `taste-references`. Database rows keep their category, label, and portable storage path. The workflow uses signed URLs when sending category-matched references to OpenAI.
+Reference images live in the private Supabase Storage bucket `taste-references`. Database rows keep their category, label, and portable storage path. The workflow uses signed URLs only when it needs to create a missing CLIP embedding; taste references are not sent to OpenAI.
 
-Keep `art`, `home_decor`, and `clothing` pools separate. Positive examples use `like`; future feedback can add `dislike` examples.
+Keep `art`, `home_decor`, and `clothing` pools separate. Each pool gets its own classifier, and examples use `like` or `dislike` labels.
 
 ## Workflow Behavior
 
@@ -153,7 +181,7 @@ Each scheduled run should:
 3. Ingest enabled eBay and Invaluable searches.
 4. Apply deterministic price, keyword, and size filters.
 5. Fast-track configured subjects without LLM calls.
-6. Run the title/spec gate and image judgment only for remaining listings.
+6. Run the title/spec gate for remaining listings, then classify visual taste locally from CLIP embeddings.
 7. Send one consolidated digest only when listings pass all required stages.
 8. Record judgments and digest delivery state in Supabase.
 
@@ -176,7 +204,7 @@ order by fetched_at desc;
 
 ## Digest And Feedback
 
-The digest is sent to `DIGEST_TO`, grouped by source, and includes USD price, sale timing when available, listing image, URL, concise reasoning, and an LLM usage footer showing prompt, completion, and total tokens. Listing images are fetched transiently by the runner and embedded in the email; they are not retained in Supabase Storage. Fast-tracked digests report zero usage.
+The digest is sent to `DIGEST_TO`, grouped by source, and includes USD price, sale timing when available, listing image, URL, concise reasoning, and an LLM usage footer for the title gate. Listing images are fetched transiently by the runner and embedded in the email; they are not retained in Supabase Storage. Fast-tracked digests report zero usage, and local taste classification adds no LLM usage.
 
 Set `include_filtered` in `config/digest.json` to `true` while validating the service. Passed listings appear first; filtered listings appear in a clearly marked section with the same feedback controls. Set it to `false` after validation. A digest is never sent unless at least one listing passes filtering.
 

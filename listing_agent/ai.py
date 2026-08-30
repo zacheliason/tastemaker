@@ -149,6 +149,48 @@ def taste_judgment(judge: OpenAIJudge, listing: dict, references: list[dict], in
     return {"verdict": verdict, "reason": result.get("reason", "")}
 
 
+def _preference_classifier(conn, storage, category: str, cache: dict):
+    from .embeddings import fit_preference_classifier, image_embedding
+
+    if category in cache:
+        return cache[category]
+    rows = conn.execute(
+        "select id, label, storage_bucket, storage_path, embedding from taste_references "
+        "where category = %s and active order by id", (category,)
+    ).fetchall()
+    samples = []
+    for row in rows:
+        vector = row[4]
+        if vector is None and row[2] and row[3]:
+            try:
+                vector = image_embedding(storage.signed_url(row[2], row[3]))
+                conn.execute("update taste_references set embedding = %s::jsonb where id = %s", (json.dumps(vector), row[0]))
+            except Exception as exc:
+                logger.warning("Reference embedding failed: category=%s id=%s error=%s", category, row[0], exc)
+        if vector is not None and row[1] in {"like", "dislike"}:
+            samples.append((vector, row[1]))
+    classifier = fit_preference_classifier(samples)
+    cache[category] = classifier
+    logger.info("Taste classifier: category=%s examples=%d available=%s", category, len(samples), bool(classifier))
+    return classifier
+
+
+def embedding_taste_judgment(conn, storage, listing: dict, category: str, classifier) -> dict:
+    from .embeddings import image_embedding
+
+    if classifier is None:
+        return {"verdict": "uncertain", "reason": "No labeled references available."}
+    image_urls = listing.get("image_urls") or []
+    if not image_urls:
+        return {"verdict": "uncertain", "reason": "Listing has no image."}
+    try:
+        verdict, probability = classifier.predict(image_embedding(image_urls[0]))
+    except Exception as exc:
+        logger.warning("Listing embedding failed: external_id=%s error=%s", listing.get("external_id"), exc)
+        return {"verdict": "uncertain", "reason": "Image embedding unavailable."}
+    return {"verdict": verdict, "reason": f"Embedding classifier confidence {probability:.0%}."}
+
+
 def _nearest_references(conn, storage, listing: dict, category: str, limit: int, pool_limit: int, cache: dict) -> list[dict]:
     from .embeddings import cosine_similarity, image_embedding
 
@@ -198,17 +240,18 @@ def run_with_config(conn, config: dict, ai_config: dict, source: str | None = No
     params = () if source is None else (source,)
     rows = conn.execute("select id, source, search_id, external_id, title, description, size_fields, image_urls, raw_data from listings where filter_status = 'passed'" + source_clause, params).fetchall()
     listings = [{"id": r[0], "source": r[1], "search_id": r[2], "external_id": r[3], "title": r[4], "description": r[5], "size_fields": r[6] or {}, "image_urls": r[7] or [], "raw_data": r[8] or {}, "search": (r[8] or {}).get("_search_config", {})} for r in rows]
+    logger.info("AI candidates: source=%s filter_status=passed count=%d", source or "all", len(listings))
     search_map = {item["id"]: item for _, settings in configured_sources(config) for item in enabled_searches(settings)}
     llm_listings = [listing for listing in listings if not is_fast_tracked(listing, ai_config)]
     judge = OpenAIJudge(model=ai_config.get("model", MODEL), max_completion_tokens=ai_config.get("max_completion_tokens", 80)) if llm_listings else None
     title_results = title_gate(judge, llm_listings, search_map, ai_config.get("title_gate", {}).get("instructions")) if judge else {}
+    logger.info("AI title results: candidates=%d results=%d fast_tracked=%d", len(llm_listings), len(title_results), len(listings) - len(llm_listings))
     if judge and llm_listings:
         usage = judge.last_usage
         conn.execute("insert into llm_usage (listing_id, operation, model, prompt_tokens, completion_tokens, total_tokens, listing_count) values (%s,'title_gate',%s,%s,%s,%s,%s)", (llm_listings[0]["id"], judge.model, usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"], len(llm_listings)))
     processed = 0
-    reference_cache = {}
-    reference_limit = max(1, int(ai_config.get("reference_limit", 6)))
-    reference_pool_limit = max(reference_limit, int(ai_config.get("reference_pool_limit", 100)))
+    skipped = 0
+    classifier_cache = {}
     for listing in listings:
         title = title_results.get(listing["external_id"], {"pass": False, "reason": "No title-gate result"})
         title_instructions = ai_config.get("title_gate", {}).get("instructions")
@@ -218,29 +261,44 @@ def run_with_config(conn, config: dict, ai_config: dict, source: str | None = No
         else:
             title_hash = _digest({"listing": listing, "search": search_map.get(listing["search_id"], {}), "instructions": title_instructions, "model": judge.model})
             title = title_results.get(listing["external_id"], {"pass": False, "reason": "No title-gate result"})
-        existing = conn.execute("select title_input_sha256, taste_input_sha256 from ai_judgments where listing_id = %s", (listing["id"],)).fetchone()
-        if existing and existing[0] == title_hash and (not title["pass"] or existing[1]):
-            continue
         taste = None
         taste_hash = None
+        category = None
+        if title["pass"] and not is_fast_tracked(listing, ai_config):
+            category = title.get("category") or search_map.get(listing["search_id"], {}).get("category")
+            if category in TASTE_CATEGORIES:
+                classifier = _preference_classifier(conn, storage, category, classifier_cache)
+                classifier_state = classifier.__dict__ if classifier else None
+                taste_hash = _digest({"listing": listing, "category": category, "classifier": classifier_state})
+        existing = conn.execute("select title_input_sha256, taste_input_sha256 from ai_judgments where listing_id = %s", (listing["id"],)).fetchone()
+        if existing and existing[0] == title_hash and (not title["pass"] or existing[1] == taste_hash):
+            skipped += 1
+            continue
         if is_fast_tracked(listing, ai_config):
             taste = {"verdict": "like", "reason": "Fast-tracked by configured Invaluable subject rule; no LLM used."}
         elif title["pass"]:
-            category = title.get("category") or search_map.get(listing["search_id"], {}).get("category")
             if category not in TASTE_CATEGORIES:
                 taste = {"verdict": "uncertain", "reason": "Category could not be assigned"}
                 conn.execute("insert into ai_judgments (listing_id, model, title_input_sha256, title_pass, title_reason, taste_input_sha256, taste_verdict, taste_reason, judged_at) values (%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict (listing_id) do update set model=excluded.model, title_input_sha256=excluded.title_input_sha256, title_pass=excluded.title_pass, title_reason=excluded.title_reason, taste_input_sha256=excluded.taste_input_sha256, taste_verdict=excluded.taste_verdict, taste_reason=excluded.taste_reason, judged_at=excluded.judged_at", (listing["id"], judge.model, title_hash, title["pass"], title["reason"], None, taste["verdict"], taste["reason"], datetime.now(timezone.utc)))
                 processed += 1
                 continue
-            references = _nearest_references(conn, storage, listing, category, reference_limit, reference_pool_limit, reference_cache)
-            taste_instructions = ai_config.get("taste_judgment", {}).get("instructions")
-            taste_hash = _digest({"listing": listing, "references": references, "instructions": taste_instructions, "model": judge.model})
-            taste = taste_judgment(judge, listing, references, taste_instructions) if references else {"verdict": "uncertain", "reason": "No portable references available"}
-            if references:
-                usage = judge.last_usage
-                conn.execute("insert into llm_usage (listing_id, operation, model, prompt_tokens, completion_tokens, total_tokens) values (%s,'taste_judgment',%s,%s,%s,%s)", (listing["id"], judge.model, usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]))
+            taste = embedding_taste_judgment(conn, storage, listing, category, classifier)
+        logger.info(
+            "AI judgment: listing_id=%s external_id=%s title_pass=%s title_reason=%r category=%s taste_verdict=%s taste_reason=%r",
+            listing["id"], listing["external_id"], title["pass"], title["reason"],
+            title.get("category") or (category if title["pass"] else None),
+            taste["verdict"] if taste else None, taste["reason"] if taste else None,
+        )
         conn.execute("""insert into ai_judgments (listing_id, model, title_input_sha256, title_pass, title_reason, taste_input_sha256, taste_verdict, taste_reason, judged_at)
           values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
           on conflict (listing_id) do update set model=excluded.model, title_input_sha256=excluded.title_input_sha256, title_pass=excluded.title_pass, title_reason=excluded.title_reason, taste_input_sha256=excluded.taste_input_sha256, taste_verdict=excluded.taste_verdict, taste_reason=excluded.taste_reason, judged_at=excluded.judged_at""", (listing["id"], judge.model if judge else ai_config.get("model", MODEL), title_hash, title["pass"], title["reason"], taste_hash, taste["verdict"] if taste else None, taste["reason"] if taste else None, datetime.now(timezone.utc)))
         processed += 1
+    persisted = conn.execute(
+        "select count(*) from ai_judgments where listing_id = any(%s)",
+        ([listing["id"] for listing in listings],),
+    ).fetchone()[0] if listings else 0
+    logger.info(
+        "AI judgments persisted: candidates=%d upserted=%d skipped_unchanged=%d persisted_for_candidates=%d",
+        len(listings), processed, skipped, persisted,
+    )
     return processed

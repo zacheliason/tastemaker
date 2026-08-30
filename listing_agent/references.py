@@ -11,10 +11,12 @@ from .storage import SupabaseStorage
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic"}
 
 
-def import_directory(conn, root: str | Path) -> int:
+def import_directory(conn, root: str | Path, label: str = "like") -> int:
     root = Path(root).expanduser().resolve()
     if not root.is_dir():
         raise RuntimeError(f"Reference directory does not exist: {root}")
+    if label not in {"like", "dislike"}:
+        raise ValueError("Reference label must be like or dislike")
     imported = 0
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in IMAGE_EXTENSIONS:
@@ -27,12 +29,13 @@ def import_directory(conn, root: str | Path) -> int:
         conn.execute("""
             insert into taste_references
               (category, label, image_path, source_image_path, image_sha256, mime_type)
-            values (%s, 'like', %s, %s, %s, %s)
+             values (%s, %s, %s, %s, %s, %s)
             on conflict (image_sha256) do update set
+              label = excluded.label,
               image_path = excluded.image_path,
               source_image_path = excluded.source_image_path,
               mime_type = excluded.mime_type
-        """, (category, str(path), str(path), digest, mimetypes.guess_type(path.name)[0]))
+        """, (category, label, str(path), str(path), digest, mimetypes.guess_type(path.name)[0]))
         imported += 1
     return imported
 
