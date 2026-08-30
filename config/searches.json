@@ -17,7 +17,7 @@
           9
         ]
       },
-      "max_price_usd": 10,
+      "max_price_usd": 1000,
       "saved_search_defaults": {
         "limit": 25,
         "sort": "bestMatch"
