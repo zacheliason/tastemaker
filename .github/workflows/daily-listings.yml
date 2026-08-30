@@ -55,6 +55,8 @@ jobs:
           python -c 'import inspect, listing_agent.ai as ai; source=inspect.getsource(ai); print(inspect.getsourcefile(ai)); print("adaptive_ai_handler=" + str("content_chars" in source and "title_gate batch failed" in source))'
       - name: Apply database schema
         run: python -c 'import os; from pathlib import Path; import psycopg; conn=psycopg.connect(os.environ["DATABASE_URL"]); conn.execute(Path("db/schema.sql").read_text()); conn.commit(); conn.close()'
+      - name: Record run start
+        run: echo "RUN_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" >> "$GITHUB_ENV"
       - name: Ingest listing feedback
         run: python -m listing_agent.cli feedback
       - name: Ingest enabled sources
@@ -64,4 +66,4 @@ jobs:
       - name: Run AI judgments
         run: python -m listing_agent.cli judge
       - name: Send digest
-        run: python -m listing_agent.cli digest
+        run: python -m listing_agent.cli digest --since "$RUN_STARTED_AT"

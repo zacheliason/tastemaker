@@ -116,7 +116,7 @@ def fetch_rows(conn, start: datetime, include_filtered: bool = False) -> list[di
         from listings l left join ai_judgments j on j.listing_id = l.id
         where l.fetched_at >= %s and ((l.filter_status = 'passed' and j.title_pass = true and j.taste_verdict in ('like', 'uncertain'))
           or (%s and l.filter_status = 'filtered'))
-        order by l.filter_status, l.source, l.fetched_at desc""", (start, include_filtered)).fetchall()
+        order by case when l.filter_status = 'passed' then 0 else 1 end, l.source, l.fetched_at desc""", (start, include_filtered)).fetchall()
     keys = ("source", "external_id", "title", "price", "currency", "price_usd", "url", "image_urls", "sale_end_at", "filter_status", "filter_reason", "title_reason", "title_pass", "category", "taste_verdict", "taste_reason")
     output = [dict(zip(keys, row)) for row in rows]
     for row in output:

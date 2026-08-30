@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -13,6 +15,8 @@ from .pricing import parse_price, to_usd
 from .urls import strip_query
 
 logger = logging.getLogger(__name__)
+
+_TOKEN_CACHE: tuple[tuple[str, str, str | None], str, float] | None = None
 
 
 def _keywords(value: str) -> str:
@@ -34,8 +38,14 @@ def _parse_end_date(value: str | None) -> datetime | None:
 
 
 def _access_token() -> str:
+    global _TOKEN_CACHE
+
     env = required_env("EBAY_CLIENT_ID", "EBAY_CLIENT_SECRET")
-    refresh_token = __import__("os").environ.get("EBAY_REFRESH_TOKEN")
+    refresh_token = os.environ.get("EBAY_REFRESH_TOKEN")
+    cache_key = (env["EBAY_CLIENT_ID"], env["EBAY_CLIENT_SECRET"], refresh_token)
+    if _TOKEN_CACHE and _TOKEN_CACHE[0] == cache_key and time.monotonic() < _TOKEN_CACHE[2]:
+        return _TOKEN_CACHE[1]
+
     if refresh_token:
         response = httpx.post(
             "https://api.ebay.com/identity/v1/oauth2/token",
@@ -62,13 +72,23 @@ def _access_token() -> str:
         raise RuntimeError(
             f"eBay OAuth failed with HTTP {response.status_code}: {detail}"
         ) from error
-    return response.json()["access_token"]
+    payload = response.json()
+    token = payload["access_token"]
+    expires_in = payload.get("expires_in")
+    if expires_in is not None:
+        # Refresh one minute early to avoid using a token that expires mid-request.
+        _TOKEN_CACHE = (
+            cache_key,
+            token,
+            time.monotonic() + max(0, float(expires_in) - 60),
+        )
+    else:
+        _TOKEN_CACHE = None
+    return token
 
 
 def saved_searches(defaults: dict | None = None) -> list[dict]:
     """Read the authenticated buyer's Saved Searches from Trading API."""
-    import os
-
     if not os.environ.get("EBAY_REFRESH_TOKEN"):
         raise RuntimeError(
             "EBAY_REFRESH_TOKEN is required to read eBay account saved searches"
@@ -122,7 +142,7 @@ def saved_searches(defaults: dict | None = None) -> list[dict]:
 
 def fetch(search: dict) -> list[Listing]:
     env = required_env("EBAY_CLIENT_ID", "EBAY_CLIENT_SECRET")
-    marketplace = __import__("os").environ.get("EBAY_MARKETPLACE_ID", "EBAY_US")
+    marketplace = os.environ.get("EBAY_MARKETPLACE_ID", "EBAY_US")
     token = _access_token()
     listings = []
     seen_ids = set()

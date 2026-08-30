@@ -33,6 +33,30 @@ def test_saved_searches_parse_favorite_searches(monkeypatch):
     assert calls[1][1]["headers"]["X-EBAY-API-IAF-TOKEN"] == "access"
 
 
+def test_access_token_is_cached_until_expiry(monkeypatch):
+    monkeypatch.setenv("EBAY_CLIENT_ID", "client")
+    monkeypatch.setenv("EBAY_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("EBAY_REFRESH_TOKEN", "refresh")
+    monkeypatch.setattr(ebay, "_TOKEN_CACHE", None)
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"access_token": "access", "expires_in": 3600}
+
+    calls = []
+    monkeypatch.setattr(
+        "listing_agent.ebay.httpx.post",
+        lambda *args, **kwargs: (calls.append((args, kwargs)) or Response()),
+    )
+
+    assert ebay._access_token() == "access"
+    assert ebay._access_token() == "access"
+    assert len(calls) == 1
+
+
 def test_fetch_paginates_deduplicates_and_ignores_bad_end_date(monkeypatch):
     monkeypatch.setenv("EBAY_CLIENT_ID", "client")
     monkeypatch.setenv("EBAY_CLIENT_SECRET", "secret")

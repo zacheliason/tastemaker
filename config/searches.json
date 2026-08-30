@@ -5,6 +5,18 @@
       "enabled": true,
       "adapter": "ebay",
       "account_saved_searches": true,
+      "allowed_size_fields": {
+        "waist": [
+          28,
+          29,
+          30
+        ],
+        "shoe_size": [
+          8,
+          8.5,
+          9
+        ]
+      },
       "max_price_usd": 10,
       "saved_search_defaults": {
         "limit": 25,

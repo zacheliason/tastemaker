@@ -2,10 +2,24 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging
+import re
 from .config import configured_sources, enabled_searches
 
 
 logger = logging.getLogger(__name__)
+
+
+def _title_size_mismatch(row: dict, search: dict) -> tuple[str, str] | None:
+    text = f"{row.get('title') or ''} {row.get('description') or ''}"
+    for field, allowed in search.get("allowed_size_fields", {}).items():
+        values = []
+        if field == "waist":
+            # Common trouser notation: the first number in 38x26 is the waist.
+            values.extend(re.findall(r"\b(\d{2})\s*x\s*\d{2}\b", text, re.IGNORECASE))
+            values.extend(re.findall(r"\b(?:waist|w)\s*(?:size\s*)?[:#-]?\s*(\d{2})\b", text, re.IGNORECASE))
+        if values and not any(value.lower() == str(allowed_value).lower() for value in values for allowed_value in allowed):
+            return field, values[0]
+    return None
 
 
 def evaluate(row: dict, search: dict) -> tuple[str, str | None]:
@@ -16,6 +30,11 @@ def evaluate(row: dict, search: dict) -> tuple[str, str | None]:
     found = next((word for word in excluded if word in text), None)
     if found:
         return "filtered", f"excluded keyword: {found}"
+
+    title_size = _title_size_mismatch(row, search)
+    if title_size:
+        field, actual = title_size
+        return "filtered", f"title size not allowed: {field}={actual}"
 
     max_price = search.get("max_price_usd")
     if max_price is not None:
@@ -28,6 +47,10 @@ def evaluate(row: dict, search: dict) -> tuple[str, str | None]:
         actual = (row.get("size_fields") or {}).get(field)
         if actual is not None and str(actual).lower() != str(expected).lower():
             return "filtered", f"structured size mismatch: {field}={actual}"
+    for field, allowed in search.get("allowed_size_fields", {}).items():
+        actual = (row.get("size_fields") or {}).get(field)
+        if actual is not None and not any(str(actual).lower() == str(value).lower() for value in allowed):
+            return "filtered", f"structured size not allowed: {field}={actual} (allowed: {allowed})"
     return "passed", None
 
 

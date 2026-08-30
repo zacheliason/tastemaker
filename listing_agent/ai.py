@@ -119,7 +119,7 @@ def _title_gate_batch(judge: OpenAIJudge, batch: list[dict], searches: dict[str,
         logger.info("OpenAI title gate batch=%s listings=%d", batch_label, len(batch))
         result = judge.complete([{
             "role": "system",
-            "content": (instructions or "Screen listings against their configured search. Return JSON object with key results, an array of objects containing external_id, pass (boolean), reason (one sentence), and category. For category, choose exactly one of art, home_decor, or clothing based on the title. Reject clear title/spec mismatches; do not invent missing facts.") + " Assign each listing exactly one category: art, home_decor, or clothing, based on its title.",
+            "content": (instructions or "Screen listings against their configured search. Return JSON object with key results, an array of objects containing external_id, pass (boolean), reason (one sentence), and category. For category, choose exactly one of art, home_decor, or clothing based on the title. Reject clear title/spec mismatches; do not invent missing facts.") + " Enforce every configured allowed_size_fields rule strictly: pass only when a stated size is in the allowlist, and reject a clearly stated disallowed size. For example, waist 38 or 38x26 must fail when allowed waist sizes are 28, 29, and 30. Assign each listing exactly one category: art, home_decor, or clothing, based on its title.",
         }, {"role": "user", "content": json.dumps(payload)}])
         output = {}
         for item in result.get("results", []):

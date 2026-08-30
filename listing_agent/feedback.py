@@ -45,45 +45,71 @@ def parse_message(raw: bytes) -> dict | None:
 
 def ingest(conn, storage: SupabaseStorage | None = None, bucket: str = "taste-references") -> int:
     env = required_env("IMAP_HOST", "IMAP_USERNAME", "IMAP_PASSWORD")
+    folder = os.environ.get("IMAP_FOLDER", "INBOX")
+    logger.info("Starting feedback email intake: host=%s folder=%s", env["IMAP_HOST"], folder)
     mailbox = imaplib.IMAP4_SSL(env["IMAP_HOST"], int(os.environ.get("IMAP_PORT", "993")))
     added = 0
+    scanned = 0
+    parsed = 0
+    duplicates = 0
+    skipped = 0
     try:
         mailbox.login(env["IMAP_USERNAME"], env["IMAP_PASSWORD"])
-        mailbox.select(os.environ.get("IMAP_FOLDER", "INBOX"), readonly=True)
+        mailbox.select(folder, readonly=True)
         status, data = mailbox.search(None, "ALL")
         if status != "OK":
             raise RuntimeError("IMAP feedback search failed")
-        for number in data[0].split():
+        message_numbers = data[0].split()
+        logger.info("Feedback mailbox search complete: messages=%d", len(message_numbers))
+        for number in message_numbers:
+            scanned += 1
             status, fetched = mailbox.fetch(number, "(RFC822)")
             if status != "OK":
+                skipped += 1
+                logger.warning("Skipping feedback email: message fetch failed")
                 continue
             raw = next((item[1] for item in fetched if isinstance(item, tuple)), None)
             feedback = parse_message(raw) if raw else None
             if not feedback:
+                skipped += 1
                 continue
+            parsed += 1
+            logger.info(
+                "Parsed feedback email: action=%s source=%s external_id=%s",
+                feedback["action"], feedback["source"], feedback["external_id"],
+            )
             event_key = hashlib.sha256(f"{feedback['message_id']}\0{feedback['action']}".encode()).hexdigest()
             if conn.execute("select 1 from feedback_events where event_key = %s", (event_key,)).fetchone():
+                duplicates += 1
+                logger.info("Skipping already-ingested feedback: action=%s source=%s external_id=%s",
+                            feedback["action"], feedback["source"], feedback["external_id"])
                 continue
             listing = conn.execute(
                 "select l.id, l.image_urls, j.category, l.raw_data from listings l left join ai_judgments j on j.listing_id = l.id where l.source = %s and l.external_id = %s",
                 (feedback["source"], feedback["external_id"]),
             ).fetchone()
             if not listing:
+                skipped += 1
                 logger.warning("Ignoring feedback for unknown listing: %s/%s", feedback["source"], feedback["external_id"])
                 continue
             category = listing[2] or (listing[3] or {}).get("_search_config", {}).get("category")
             image_url = (listing[1] or [None])[0]
             if category not in VALID_CATEGORIES or not image_url or not image_url.startswith("https://"):
+                skipped += 1
                 logger.warning("Ignoring feedback without category or usable image: %s", feedback["external_id"])
                 continue
             try:
                 response = httpx.get(image_url, timeout=30, follow_redirects=True)
                 response.raise_for_status()
             except httpx.HTTPError as exc:
+                skipped += 1
                 logger.warning("Ignoring feedback image download failure: %s (%s)", feedback["external_id"], exc)
                 continue
             content_type = response.headers.get("content-type", "image/jpeg").split(";", 1)[0]
             if not content_type.startswith("image/") or len(response.content) > 5 * 1024 * 1024:
+                skipped += 1
+                logger.warning("Ignoring feedback with unusable image response: external_id=%s content_type=%s bytes=%d",
+                               feedback["external_id"], content_type, len(response.content))
                 continue
             digest = hashlib.sha256(response.content).hexdigest()
             suffix = "." + content_type.split("/", 1)[1].replace("jpeg", "jpg")
@@ -102,9 +128,13 @@ def ingest(conn, storage: SupabaseStorage | None = None, bucket: str = "taste-re
             conn.execute("insert into feedback_events (event_key, message_id, listing_id, action, source, external_id) values (%s,%s,%s,%s,%s,%s)",
                          (event_key, feedback["message_id"], listing[0], feedback["action"], feedback["source"], feedback["external_id"]))
             added += 1
+            logger.info("Ingested feedback: action=%s source=%s external_id=%s category=%s",
+                        feedback["action"], feedback["source"], feedback["external_id"], category)
     finally:
         try:
             mailbox.logout()
         except (imaplib.IMAP4.error, OSError):
             pass
+    logger.info("Feedback email intake complete: scanned=%d parsed=%d added=%d duplicates=%d skipped=%d",
+                scanned, parsed, added, duplicates, skipped)
     return added

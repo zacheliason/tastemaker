@@ -132,6 +132,8 @@ def main() -> None:
             defaults = dict(settings.get("saved_search_defaults") or {})
             if "max_price_usd" in settings:
                 defaults["max_price_usd"] = settings["max_price_usd"]
+            if "allowed_size_fields" in settings:
+                defaults["allowed_size_fields"] = settings["allowed_size_fields"]
             account_searches = adapter.saved_searches(defaults)
             # Account mode is authoritative; configured searches are not a fallback.
             searches = account_searches
@@ -145,6 +147,8 @@ def main() -> None:
             searches = enabled_searches(settings)
         for search in searches:
             effective_search = {**(settings.get("saved_search_defaults") or {}), **search}
+            if "allowed_size_fields" in settings:
+                effective_search["allowed_size_fields"] = settings["allowed_size_fields"]
             if settings.get("enrichment_provider"):
                 effective_search["enrichment_provider"] = settings["enrichment_provider"]
             if "max_price_usd" in settings:

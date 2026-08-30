@@ -110,6 +110,31 @@ def test_render_marks_filtered_section():
     assert "price exceeds limit" in markup
 
 
+def test_render_places_all_passed_listings_before_filtered_listings():
+    rows = [
+        {
+            "section": "Filtered", "source": "ebay", "external_id": "filtered-1", "title": "Filtered listing",
+            "price": "1000.00", "currency": "USD", "price_usd": "1000.00", "url": "https://example.test/filtered",
+            "image_urls": [], "filter_reason": "price exceeds limit", "taste_verdict": "filtered",
+        },
+        {
+            "section": "Passed", "source": "invaluable", "external_id": "passed-1", "title": "Passed invaluable listing",
+            "price": "50.00", "currency": "USD", "price_usd": "50.00", "url": "https://example.test/passed-1",
+            "image_urls": [], "taste_verdict": "like",
+        },
+        {
+            "section": "Passed", "source": "ebay", "external_id": "passed-2", "title": "Passed ebay listing",
+            "price": "60.00", "currency": "USD", "price_usd": "60.00", "url": "https://example.test/passed-2",
+            "image_urls": [], "taste_verdict": "uncertain",
+        },
+    ]
+
+    _, markup = render(rows, "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc))
+
+    assert markup.index("Passed ebay listing") < markup.index("Filtered listing")
+    assert markup.index("Passed invaluable listing") < markup.index("Filtered listing")
+
+
 def test_empty_digest_is_not_delivered():
     class Connection:
         def execute(self, query, params):
