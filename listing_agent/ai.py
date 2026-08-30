@@ -108,27 +108,41 @@ def title_gate(judge: OpenAIJudge, listings: list[dict], searches: dict[str, dic
 
 def _title_gate_batch(judge: OpenAIJudge, batch: list[dict], searches: dict[str, dict],
                       instructions: str | None, batch_label: int | str) -> dict[str, dict]:
-        """Run one title batch; callers decide whether a failed batch is recoverable."""
-        payload = [{
-            "external_id": row["external_id"],
-            "title": row["title"],
-            "description": row.get("description") or "",
-            "size_fields": row.get("size_fields") or {},
-            "search": row.get("search") or searches.get(row["search_id"], {}),
-        } for row in batch]
-        logger.info("OpenAI title gate batch=%s listings=%d", batch_label, len(batch))
-        result = judge.complete([{
+    """Run one title batch; callers decide whether a failed batch is recoverable."""
+    payload = [{
+        "external_id": row["external_id"],
+        "title": row["title"],
+        "description": row.get("description") or "",
+        "size_fields": row.get("size_fields") or {},
+        "search": row.get("search") or searches.get(row["search_id"], {}),
+    } for row in batch]
+    logger.info("OpenAI title gate batch=%s listings=%d", batch_label, len(batch))
+    result = judge.complete([{
             "role": "system",
             "content": (instructions or "Screen listings against their configured search. Return JSON object with key results, an array of objects containing external_id, pass (boolean), reason (one sentence), and category. For category, choose exactly one of art, home_decor, or clothing based on the title. Reject clear title/spec mismatches; do not invent missing facts.") + " Enforce every configured allowed_size_fields rule strictly: pass only when a stated size is in the allowlist, and reject a clearly stated disallowed size. For example, waist 38 or 38x26 must fail when allowed waist sizes are 28, 29, and 30. Assign each listing exactly one category: art, home_decor, or clothing, based on its title.",
-        }, {"role": "user", "content": json.dumps(payload)}])
-        output = {}
-        for item in result.get("results", []):
-            category = item.get("category")
-            result_item = {"pass": bool(item.get("pass")), "reason": item.get("reason", "")}
-            if category in TASTE_CATEGORIES:
-                result_item["category"] = category
-            output[str(item["external_id"])] = result_item
-        return output
+    }, {"role": "user", "content": json.dumps(payload)}])
+    if not isinstance(result, dict) or not isinstance(result.get("results"), list):
+        raise RuntimeError("OpenAI title gate returned an invalid results object")
+    expected_ids = {str(row["external_id"]) for row in batch}
+    output = {}
+    for item in result["results"]:
+        if not isinstance(item, dict):
+            raise RuntimeError("OpenAI title gate returned a non-object result")
+        external_id = str(item.get("external_id", ""))
+        category = item.get("category")
+        if external_id not in expected_ids or external_id in output:
+            raise RuntimeError("OpenAI title gate returned an unexpected or duplicate external_id")
+        if not isinstance(item.get("pass"), bool):
+            raise RuntimeError("OpenAI title gate returned a non-boolean pass value")
+        if not isinstance(item.get("reason", ""), str):
+            raise RuntimeError("OpenAI title gate returned a non-string reason")
+        if category is not None and category not in TASTE_CATEGORIES:
+            raise RuntimeError("OpenAI title gate returned an invalid category")
+        result_item = {"pass": item["pass"], "reason": item.get("reason", "")}
+        if category in TASTE_CATEGORIES:
+            result_item["category"] = category
+        output[external_id] = result_item
+    return output
 
 
 def taste_judgment(judge: OpenAIJudge, listing: dict, references: list[dict], instructions: str | None = None) -> dict:

@@ -26,6 +26,18 @@ def test_title_gate_prompt_strictly_enforces_allowed_sizes():
     assert "waist 38 or 38x26 must fail" in judge.messages[0][0]["content"]
 
 
+def test_title_gate_does_not_coerce_string_boolean():
+    judge = FakeJudge({"results": [{"external_id": "x", "pass": "false", "reason": "No", "category": "clothing"}]})
+    result = title_gate(judge, [{"external_id": "x", "search_id": "s", "title": "T", "description": "", "size_fields": {}}], {"s": {}})
+    assert result == {}
+
+
+def test_title_gate_ignores_unknown_result_ids_after_retries():
+    judge = FakeJudge({"results": [{"external_id": "unknown", "pass": True, "reason": "No", "category": "art"}]})
+    result = title_gate(judge, [{"external_id": "x", "search_id": "s", "title": "T", "description": "", "size_fields": {}}], {"s": {}})
+    assert result == {}
+
+
 def test_fast_track_uses_invaluable_email_subject():
     config = {"pre_llm_policy": {"invaluable": {"fast_track_subject_contains": ["Josef Albers"]}}}
     assert is_fast_tracked({"source": "invaluable", "raw_data": {"email_subject": "New pieces from Josef Albers"}}, config)

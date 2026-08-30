@@ -31,7 +31,8 @@ def save(listings: list[Listing]) -> int:
                 cur.execute("""
                     insert into listings (source, search_id, external_id, title, price, currency, price_usd, url, image_urls, description, size_fields, raw_data, sale_end_at, fetched_at)
                     values (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s::jsonb,%s::jsonb,%s,%s)
-                    on conflict (source, external_id) do update set
+                   on conflict (source, external_id) do update set
+                      search_id = excluded.search_id,
                       title = excluded.title,
                       price = excluded.price,
                       currency = excluded.currency,
@@ -39,6 +40,7 @@ def save(listings: list[Listing]) -> int:
                       url = excluded.url,
                       image_urls = excluded.image_urls,
                        description = excluded.description,
+                       size_fields = excluded.size_fields,
                        sale_end_at = excluded.sale_end_at,
                        raw_data = excluded.raw_data,
                       fetched_at = excluded.fetched_at

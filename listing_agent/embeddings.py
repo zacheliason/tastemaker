@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import math
 import os
 from functools import lru_cache
 from dataclasses import dataclass
@@ -68,22 +69,28 @@ def fit_preference_classifier(samples: list[tuple[list[float], str]]) -> Prefere
     if len(labels) == 1:
         return PreferenceClassifier([], 0.0, next(iter(labels)))
 
-    import torch
-
-    vectors = torch.tensor([vector for vector, _ in samples], dtype=torch.float32)
-    targets = torch.tensor([1.0 if label == "like" else 0.0 for _, label in samples], dtype=torch.float32)
-    counts = torch.bincount(targets.to(torch.int64), minlength=2).float()
-    sample_weights = torch.where(targets == 1, counts[0], counts[1])
-    sample_weights = sample_weights / sample_weights.mean()
-    weights = torch.zeros(vectors.shape[1], requires_grad=True)
-    bias = torch.zeros(1, requires_grad=True)
-    optimizer = torch.optim.Adam([weights, bias], lr=0.05)
-    # A small L2 penalty keeps a few feedback examples from overfitting CLIP noise.
+    vectors = [vector for vector, _ in samples]
+    targets = [1.0 if label == "like" else 0.0 for _, label in samples]
+    like_count = sum(targets)
+    dislike_count = len(targets) - like_count
+    sample_weights = [dislike_count if target else like_count for target in targets]
+    mean_weight = sum(sample_weights) / len(sample_weights)
+    sample_weights = [weight / mean_weight for weight in sample_weights]
+    weights = [0.0] * len(vectors[0])
+    bias = 0.0
+    # This small model does not need a heavyweight tensor dependency at fit time.
     for _ in range(300):
-        optimizer.zero_grad()
-        logits = vectors @ weights + bias
-        loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, targets, weight=sample_weights)
-        loss = loss + 0.01 * weights.square().mean()
-        loss.backward()
-        optimizer.step()
-    return PreferenceClassifier(weights.detach().tolist(), float(bias.detach().item()))
+        gradients = [0.0] * len(weights)
+        bias_gradient = 0.0
+        for vector, target, sample_weight in zip(vectors, targets, sample_weights):
+            score = sum(weight * value for weight, value in zip(weights, vector)) + bias
+            probability = 1.0 / (1.0 + math.exp(-max(-60.0, min(60.0, score))))
+            error = (probability - target) * sample_weight
+            for index, value in enumerate(vector):
+                gradients[index] += error * value
+            bias_gradient += error
+        scale = 1.0 / len(vectors)
+        for index in range(len(weights)):
+            weights[index] -= 0.05 * (gradients[index] * scale + 0.01 * weights[index])
+        bias -= 0.05 * bias_gradient * scale
+    return PreferenceClassifier(weights, bias)

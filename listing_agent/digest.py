@@ -14,6 +14,7 @@ from .config import required_env
 
 
 MAX_INLINE_ATTACHMENTS = 500
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 
 def _feedback_link(address: str, action: str, source: str, external_id: str, title: str) -> str:
@@ -144,7 +145,10 @@ def download_images(rows: list[dict]) -> tuple[dict[str, str], list[tuple[str, b
             response = httpx.get(url, timeout=20, follow_redirects=True)
             response.raise_for_status()
             content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
-            if not content_type.startswith("image/") or len(response.content) > 5 * 1024 * 1024:
+            content_length = response.headers.get("content-length")
+            if (not content_type.startswith("image/")
+                    or (content_length and int(content_length) > MAX_IMAGE_BYTES)
+                    or len(response.content) > MAX_IMAGE_BYTES):
                 continue
             maintype, subtype = content_type.split("/", 1)
             cid = f"listing-{hashlib.sha256(row['external_id'].encode()).hexdigest()[:16]}@digest"
@@ -171,6 +175,16 @@ def deliver(conn, start: datetime, recipient: str, dry_run: bool = False, includ
     rows = fetch_rows(conn, start, include_filtered)
     passed_count = sum(row["section"] == "Passed" for row in rows)
     if not passed_count and not dry_run:
+        return 0
+    if not dry_run:
+        conn.execute(
+            "select pg_advisory_xact_lock(hashtext(%s))",
+            (f"{start.date()}:{recipient}",),
+        )
+    if not dry_run and conn.execute(
+        "select 1 from digest_runs where digest_date = %s and recipient = %s",
+        (start.date(), recipient),
+    ).fetchone():
         return 0
     feedback_recipient = os.environ.get("IMAP_USERNAME") or recipient
     image_sources, attachments = download_images(rows) if not dry_run else ({}, [])

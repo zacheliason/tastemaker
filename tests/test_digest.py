@@ -144,3 +144,21 @@ def test_empty_digest_is_not_delivered():
             return Result()
 
     assert deliver(Connection(), datetime(2026, 8, 28, tzinfo=timezone.utc), "digest@example.com") == 0
+
+
+def test_digest_is_not_sent_twice_for_same_date(monkeypatch):
+    class Result:
+        def fetchall(self):
+            return []
+
+        def fetchone(self):
+            return (1,)
+
+    class Connection:
+        def execute(self, query, params):
+            if query.startswith("select 1 from digest_runs"):
+                return Result()
+            return Result()
+
+    monkeypatch.setattr("listing_agent.digest.send", lambda *args: (_ for _ in ()).throw(AssertionError("sent twice")))
+    assert deliver(Connection(), datetime(2026, 8, 28, tzinfo=timezone.utc), "digest@example.com") == 0

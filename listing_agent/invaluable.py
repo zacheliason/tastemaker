@@ -69,6 +69,11 @@ def _listing_key(value: str | None) -> str:
 def _date(value: str | None) -> datetime | None:
     if not value:
         return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
 
 
 def _auction_date(value: str | None) -> datetime | None:
@@ -88,29 +93,52 @@ def _auction_date(value: str | None) -> datetime | None:
     return parsed if parsed >= now else parsed.replace(year=now.year + 1)
 
 
+def _deduplicate_repeated_text(value: str) -> str:
+    """Recommendation emails repeat each artist for desktop and mobile cards."""
+    words = value.split()
+    midpoint = len(words) // 2
+    if midpoint and len(words) % 2 == 0 and words[:midpoint] == words[midpoint:]:
+        return " ".join(words[:midpoint])
+    return value
+
+
 def parse_message(message: Message, search: dict) -> list[Listing]:
     soup = BeautifulSoup(_html(message), "html.parser")
     output = []
     images = soup.select('img[alt="lot image"][src]') or soup.select("a[href] img[src]")
+    candidates = [(image.find_parent("a", href=True), image) for image in images]
+    existing_hrefs = {link.get("href") for link, _ in candidates if link}
+    candidates.extend(
+        (link, link.select_one("img[src]"))
+        for link in soup.select('a[href*="/auction-lot/"]')
+        if link.get("href") not in existing_hrefs
+    )
     seen_urls = set()
-    for image in images:
-        link = image.find_parent("a", href=True)
+    for link, image in candidates:
         if not link:
             continue
-        container = image.find_parent("table") or link.parent
+        item_id = link.get("itemid") or (image.get("itemid") if image else None)
+        if "/tecr" in link.get("href", "") and not item_id:
+            continue
+        container = (image.find_parent("table") if image else None) or link.parent
         title_cell = container.select_one('td[style*="font-weight:bold"]')
         title = (
             title_cell.get_text(" ", strip=True)
             if title_cell
-            else link.get_text(" ", strip=True)
+            else _deduplicate_repeated_text(link.get_text(" ", strip=True))
+            or _deduplicate_repeated_text(image.get("alt", "") if image else "")
         )
         if not title or title.lower() in {"lot image", "invaluable"}:
             continue
-        image_urls = strip_queries([image["src"]])
-        href = strip_query(
-            link.get("title", "")
-            if link.get("title", "").startswith("https://")
-            else link["href"]
+        image_urls = strip_queries([image["src"]]) if image else []
+        href = (
+            f"https://www.invaluable.com/auction-lot/-{item_id}"
+            if item_id
+            else strip_query(
+                link.get("title", "")
+                if link.get("title", "").startswith("https://")
+                else link["href"]
+            )
         )
         if href in seen_urls:
             continue

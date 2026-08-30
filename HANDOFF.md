@@ -167,7 +167,7 @@ python3 -m pytest
 
 ## Current Configuration 
 
-The workflow currently schedules at `0 12 * * *` UTC and supports manual dispatch. eBay is currently disabled in `config/searches.json`; Invaluable is enabled with `zenrows` enrichment and category `art`. The configured Invaluable limit is currently `max_price_usd: 200`, while the eBay test search uses `max_price_usd: 100`.
+The workflow currently schedules at `0 12 * * *` UTC and supports manual dispatch. eBay and Invaluable are enabled in `config/searches.json`; eBay uses account saved searches with a global `max_price_usd: 10` cap, while Invaluable uses `zenrows` enrichment, category `art`, and `max_price_usd: 200`.
 
 ## Acceptance Criteria For “Complete”
 

@@ -1,5 +1,7 @@
 from email.message import EmailMessage
-from listing_agent.invaluable import _listing_key, enrich_with_retry, parse_lot_page, parse_message
+from datetime import timezone
+
+from listing_agent.invaluable import _date, _listing_key, enrich_with_retry, parse_lot_page, parse_message
 from listing_agent.models import Listing
 
 
@@ -13,10 +15,52 @@ def test_parse_message_extracts_listing_fields():
     assert items[0].image_urls == ["https://example.test/image.jpg"]
 
 
+def test_parse_message_extracts_recommendation_lot_links_and_deduplicates_artist():
+    message = EmailMessage()
+    message["Subject"] = "More art you may like"
+    message.set_content(
+        """<html><body>
+        <h2>Lots Worth a Look</h2>
+        <a href="https://www.invaluable.com/auction-lot/zdenek-sykora-c-abc123">
+          Zdeněk Sýkora (1920 Louny 2011) Zdeněk Sýkora (1920 Louny 2011)
+        </a>
+        <a href="https://www.invaluable.com/discover-more">DISCOVER MORE</a>
+        </body></html>""",
+        subtype="html",
+    )
+    items = parse_message(message, {"id": "test", "include_keywords": ["Sýkora"]})
+    assert len(items) == 1
+    assert items[0].title == "Zdeněk Sýkora (1920 Louny 2011)"
+    assert items[0].url == "https://www.invaluable.com/auction-lot/zdenek-sykora-c-abc123"
+    assert items[0].image_urls == []
+
+
+def test_parse_message_uses_recommendation_image_metadata_for_tracked_links():
+    message = EmailMessage()
+    message.set_content(
+        """<a itemid="0022696213" href="https://invaluable.us-1.evergage.com/tecr?q=tracked">
+          <img alt="Zdeněk Sýkora (1920 Louny 2011)"
+               src="https://image.invaluable.com/lot.jpg">
+        </a>""",
+        subtype="html",
+    )
+    items = parse_message(message, {"id": "test"})
+    assert len(items) == 1
+    assert items[0].title == "Zdeněk Sýkora (1920 Louny 2011)"
+    assert items[0].url == "https://www.invaluable.com/auction-lot/-0022696213"
+    assert items[0].image_urls == ["https://image.invaluable.com/lot.jpg"]
+
+
 def test_listing_key_matches_full_and_canonical_invaluable_slugs():
     email_url = "https://www.invaluable.com/auction-lot/Handsome-French-Napoleon-III-Ebony-Marble-Dial-344-c-5C250534A6"
     canonical_url = "https://www.invaluable.com/auction-lot/handsome-french-napoleon-iii-ebony-marble-dial-wa-344-c-5c250534a6"
     assert _listing_key(email_url) == _listing_key(canonical_url)
+
+
+def test_date_parses_iso8601_and_normalizes_naive_values():
+    assert _date("2026-09-16T10:00:00Z").tzinfo == timezone.utc
+    assert _date("2026-09-16T10:00:00-04:00").utcoffset().total_seconds() == -4 * 3600
+    assert _date("not-a-date") is None
 
 
 def test_parse_lot_page_uses_product_json_ld():

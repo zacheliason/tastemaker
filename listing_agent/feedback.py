@@ -7,6 +7,7 @@ import os
 import tempfile
 from email import message_from_bytes
 from email.header import decode_header, make_header
+from email.utils import parseaddr
 
 import httpx
 
@@ -72,6 +73,12 @@ def ingest(conn, storage: SupabaseStorage | None = None, bucket: str = "taste-re
             feedback = parse_message(raw) if raw else None
             if not feedback:
                 skipped += 1
+                continue
+            sender = message_from_bytes(raw).get("From", "") if raw else ""
+            allowed_sender = os.environ.get("FEEDBACK_FROM") or os.environ.get("DIGEST_FROM") or env["IMAP_USERNAME"]
+            if parseaddr(sender)[1].lower() != parseaddr(allowed_sender)[1].lower():
+                skipped += 1
+                logger.warning("Ignoring feedback from untrusted sender: %s", sender)
                 continue
             parsed += 1
             logger.info(
