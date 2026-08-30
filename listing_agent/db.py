@@ -16,6 +16,13 @@ def save(listings: list[Listing]) -> int:
                     continue
                 item.url = strip_query(item.url)
                 item.image_urls = strip_queries(item.image_urls)
+                if item.source == "ebay":
+                    already_seen = cur.execute(
+                        "select 1 from listings where source = %s and (external_id = %s or lower(url) = lower(%s)) limit 1",
+                        (item.source, item.external_id, item.url),
+                    ).fetchone()
+                    if already_seen:
+                        continue
                 existing = cur.execute(
                     "select external_id from listings where source = %s and lower(url) = lower(%s) and external_id <> %s",
                     (item.source, item.url, item.external_id),

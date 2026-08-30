@@ -5,12 +5,12 @@
       "enabled": true,
       "adapter": "ebay",
       "account_saved_searches": true,
+      "max_price_usd": 100,
       "searches": [
         {
           "id": "ebay-rl-cream-pleated-trousers-w30",
           "query": "ralph lauren polo cream pleated trousers waist size 30",
           "limit": 100,
-          "max_price_usd": 100,
           "category": "clothing"
         }
       ]
@@ -19,11 +19,11 @@
       "enabled": true,
       "adapter": "invaluable",
       "enrichment_provider": "zenrows",
+      "max_price_usd": 200,
       "searches": [
         {
           "id": "invaluable-all-feeds",
           "limit": 200,
-          "max_price_usd": 200,
           "category": "art"
         }
       ]

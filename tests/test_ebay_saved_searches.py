@@ -29,7 +29,7 @@ def test_saved_searches_parse_favorite_searches(monkeypatch):
     monkeypatch.setattr("listing_agent.ebay.httpx.post", post)
     results = ebay.saved_searches()
     assert results[0]["query"] == "mid century modern clocks"
-    assert results[0]["max_price_usd"] == 200.0
+    assert "max_price_usd" not in results[0]
     assert calls[1][1]["headers"]["X-EBAY-API-IAF-TOKEN"] == "access"
 
 
@@ -67,6 +67,34 @@ def test_fetch_paginates_deduplicates_and_ignores_bad_end_date(monkeypatch):
     assert calls == [{"q": "clocks", "limit": 2, "offset": 0}, {"q": "clocks", "limit": 1, "offset": 2}]
 
 
+def test_fetch_extracts_keywords_from_saved_search_url(monkeypatch):
+    monkeypatch.setenv("EBAY_CLIENT_ID", "client")
+    monkeypatch.setenv("EBAY_CLIENT_SECRET", "secret")
+    monkeypatch.setattr(ebay, "_access_token", lambda: "access")
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"itemSummaries": []}
+
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append(kwargs["params"])
+        return Response()
+
+    monkeypatch.setattr("listing_agent.ebay.httpx.get", get)
+    ebay.fetch({
+        "id": "search",
+        "query": "https://www.ebay.com/sch/i.html?_nkw=black+meermin+shoe+size+8.5&_dcat=53120&_geositeid=0&US%2520Shoe%2520Size=US%2520Men%25208%7CUS%2520Men%25208%252E5%7CUS%2520Men%25209%252E5&_udhi=200.00&_fcid=1&_sop=12&_stpos=22206-2974&_svsrch=1&_trksid=m194",
+        "limit": 100,
+    })
+
+    assert calls == [{"q": "black meermin shoe size 8.5", "limit": 100, "offset": 0}]
+
+
 def test_saved_searches_uses_account_values_over_defaults(monkeypatch):
     monkeypatch.setenv("EBAY_CLIENT_ID", "client")
     monkeypatch.setenv("EBAY_CLIENT_SECRET", "secret")
@@ -91,4 +119,4 @@ def test_saved_searches_uses_account_values_over_defaults(monkeypatch):
 
     assert len(results) == 1
     assert results[0]["query"] == "mid century modern clocks"
-    assert results[0]["max_price_usd"] == 200.0
+    assert results[0]["max_price_usd"] == 1

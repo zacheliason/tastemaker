@@ -40,7 +40,9 @@ def apply(conn, searches: dict, source: str | None = None) -> dict[str, dict[str
         passed = filtered = 0
         for row in rows:
             data = {"title": row[2], "description": row[3], "price_usd": row[4], "size_fields": row[5]}
-            search = source_searches.get(row[1]) or (row[6] or {}).get("_search_config", {})
+            search = dict(source_searches.get(row[1]) or (row[6] or {}).get("_search_config", {}))
+            if "max_price_usd" in configured[current_source]:
+                search["max_price_usd"] = configured[current_source]["max_price_usd"]
             status, reason = evaluate(data, search)
             if status == "passed":
                 passed += 1

@@ -1,5 +1,5 @@
 from email.message import EmailMessage
-from listing_agent.invaluable import enrich_with_retry, parse_lot_page, parse_message
+from listing_agent.invaluable import _listing_key, enrich_with_retry, parse_lot_page, parse_message
 from listing_agent.models import Listing
 
 
@@ -11,6 +11,12 @@ def test_parse_message_extracts_listing_fields():
     assert items[0].title == "Marc Chagall woodblock print"
     assert str(items[0].price) == "250.00"
     assert items[0].image_urls == ["https://example.test/image.jpg"]
+
+
+def test_listing_key_matches_full_and_canonical_invaluable_slugs():
+    email_url = "https://www.invaluable.com/auction-lot/Handsome-French-Napoleon-III-Ebony-Marble-Dial-344-c-5C250534A6"
+    canonical_url = "https://www.invaluable.com/auction-lot/handsome-french-napoleon-iii-ebony-marble-dial-wa-344-c-5c250534a6"
+    assert _listing_key(email_url) == _listing_key(canonical_url)
 
 
 def test_parse_lot_page_uses_product_json_ld():

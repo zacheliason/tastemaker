@@ -60,6 +60,12 @@ def _price(text: str) -> tuple[Decimal | None, str | None]:
         return None, None
 
 
+def _listing_key(value: str | None) -> str:
+    normalized = url_key(value)
+    match = re.search(r"/auction-lot/.*-c-([a-z0-9]+)$", normalized)
+    return f"invaluable-lot:{match.group(1)}" if match else normalized
+
+
 def _date(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -114,12 +120,6 @@ def parse_message(message: Message, search: dict) -> list[Listing]:
         haystack = f"{title} {block}".lower()
         if search.get("include_keywords") and not any(
             k.lower() in haystack for k in search["include_keywords"]
-        ):
-            continue
-        if (
-            price is not None
-            and search.get("max_price") is not None
-            and price > Decimal(str(search["max_price"]))
         ):
             continue
         external_id = hashlib.sha256(href.encode()).hexdigest()[:32]
@@ -285,7 +285,7 @@ def fetch(search: dict) -> list[Listing]:
     db_env = required_env("DATABASE_URL")
     with psycopg.connect(db_env["DATABASE_URL"]) as conn:
         existing_urls = {
-            url_key(row[0])
+            _listing_key(row[0])
             for row in conn.execute("select url from listings where source = 'invaluable'").fetchall()
         }
     mailbox = imaplib.IMAP4_SSL(
@@ -317,7 +317,7 @@ def fetch(search: dict) -> list[Listing]:
             ):
                 continue
             for candidate in parse_message(message, search):
-                if url_key(candidate.url) in existing_urls:
+                if _listing_key(candidate.url) in existing_urls:
                     candidate.raw_data["enrichment_status"] = "skipped_existing"
                     candidate.raw_data["enrichment_reason"] = "URL already exists in listings database"
                     listings.append(candidate)

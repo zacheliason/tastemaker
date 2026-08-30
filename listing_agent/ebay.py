@@ -4,7 +4,7 @@ import logging
 import httpx
 import xml.etree.ElementTree as ET
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from .config import required_env
 from .models import Listing
@@ -13,6 +13,15 @@ from .urls import strip_query
 
 
 logger = logging.getLogger(__name__)
+
+
+def _keywords(value: str) -> str:
+    """Convert an eBay saved-search URL to the Browse API keyword query."""
+    parsed = urlsplit(value)
+    if not parsed.scheme or not parsed.netloc:
+        return value
+    query = parse_qs(parsed.query).get("_nkw", [])
+    return unquote(query[0]) if query else value
 
 
 def _parse_end_date(value: str | None) -> datetime | None:
@@ -43,16 +52,22 @@ def _access_token() -> str:
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             timeout=30,
         )
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as error:
+        detail = response.text[:300].replace("\n", " ")
+        raise RuntimeError(
+            f"eBay OAuth failed with HTTP {response.status_code}: {detail}"
+        ) from error
     return response.json()["access_token"]
 
 
 def saved_searches(defaults: dict | None = None) -> list[dict]:
     """Read the authenticated buyer's Saved Searches from Trading API."""
     import os
-    token = _access_token()
     if not os.environ.get("EBAY_REFRESH_TOKEN"):
         raise RuntimeError("EBAY_REFRESH_TOKEN is required to read eBay account saved searches")
+    token = _access_token()
     response = httpx.post(
         "https://api.ebay.com/ws/api.dll",
         headers={
@@ -76,17 +91,11 @@ def saved_searches(defaults: dict | None = None) -> list[dict]:
         query = value("SearchQuery") or value("QueryKeywords") or ""
         if not query:
             continue
-        price_max = value("PriceMax")
-        try:
-            price_max = float(Decimal(price_max)) if price_max else None
-        except (InvalidOperation, ValueError):
-            price_max = None
         output.append({
             **(defaults or {}),
             "id": "ebay-saved-" + (value("SearchName") or query).lower().replace(" ", "-")[:80],
-            "query": query,
+            "query": _keywords(query),
             "limit": 100,
-            "max_price_usd": price_max,
             "category_ids": [value("CategoryID")] if value("CategoryID") else [],
             "exclude_keywords": [],
         })
@@ -109,7 +118,7 @@ def fetch(search: dict) -> list[Listing]:
     offset = 0
     while len(listings) < requested:
         page_limit = min(200, requested - len(listings))
-        params = {"q": search["query"], "limit": page_limit, "offset": offset}
+        params = {"q": _keywords(search["query"]), "limit": page_limit, "offset": offset}
         category_ids = [str(value) for value in search.get("category_ids", []) if value]
         if category_ids:
             params["category_ids"] = ",".join(category_ids)

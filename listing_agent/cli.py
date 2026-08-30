@@ -118,7 +118,10 @@ def main() -> None:
         source_total = 0
         adapter = adapter_for(settings)
         if settings.get("account_saved_searches"):
-            account_searches = adapter.saved_searches(settings.get("saved_search_defaults"))
+            defaults = dict(settings.get("saved_search_defaults") or {})
+            if "max_price_usd" in settings:
+                defaults["max_price_usd"] = settings["max_price_usd"]
+            account_searches = adapter.saved_searches(defaults)
             # Account mode is authoritative; configured searches are not a fallback.
             searches = account_searches
             logger.info("eBay effective saved searches: %d", len(searches))
@@ -130,7 +133,12 @@ def main() -> None:
         else:
             searches = enabled_searches(settings)
         for search in searches:
-            items = fetcher({**search, "enrichment_provider": settings.get("enrichment_provider", "playwright")})
+            effective_search = dict(search)
+            if settings.get("enrichment_provider"):
+                effective_search["enrichment_provider"] = settings["enrichment_provider"]
+            if "max_price_usd" in settings:
+                effective_search["max_price_usd"] = settings["max_price_usd"]
+            items = fetcher(effective_search)
             if not items:
                 raise RuntimeError(f"{source} search {search['id']} returned zero items; refusing to continue silently")
             source_total += save(items)
