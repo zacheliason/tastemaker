@@ -14,8 +14,8 @@ class FakeJudge(OpenAIJudge):
 
 def test_title_gate_batches_listings_and_returns_results():
     listings = [{"external_id": "x", "search_id": "s", "title": "RL trousers", "description": "", "size_fields": {}}]
-    result = title_gate(FakeJudge({"results": [{"external_id": "x", "pass": True, "reason": "Matches."}]}), listings, {"s": {"query": "trousers", "required_size_fields": {"waist": 30}}})
-    assert result == {"x": {"pass": True, "reason": "Matches."}}
+    result = title_gate(FakeJudge({"results": [{"external_id": "x", "pass": True, "reason": "Matches.", "category": "clothing"}]}), listings, {"s": {"query": "trousers", "required_size_fields": {"waist": 30}}})
+    assert result == {"x": {"pass": True, "reason": "Matches.", "category": "clothing"}}
 
 
 def test_fast_track_uses_invaluable_email_subject():

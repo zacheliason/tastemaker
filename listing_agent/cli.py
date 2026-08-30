@@ -140,7 +140,8 @@ def main() -> None:
                 effective_search["max_price_usd"] = settings["max_price_usd"]
             items = fetcher(effective_search)
             if not items:
-                raise RuntimeError(f"{source} search {search['id']} returned zero items; refusing to continue silently")
+                logger.info("%s search %s returned zero items; continuing", source, search["id"])
+                continue
             source_total += save(items)
         print(f"{source}: fetched and upserted {source_total} listing records")
         total += source_total

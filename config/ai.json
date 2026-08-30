@@ -10,7 +10,7 @@
     }
   },
   "title_gate": {
-    "instructions": "Screen each listing against its configured search. Reject clear title/spec mismatches and do not invent facts. Return JSON: {results:[{external_id,pass,reason}]}. Make reason <=8 words."
+    "instructions": "Screen each listing against its configured search. Assign exactly one category based on title: art, home_decor, or clothing. Reject clear title/spec mismatches and do not invent facts. Return JSON: {results:[{external_id,pass,reason,category}]}. Make reason <=8 words."
   },
   "taste_judgment": {
     "instructions": "Compare the listing only with same-category references. Ignore price and popularity. Return JSON: {verdict,reason}, with verdict like, dislike, or uncertain; reason <=8 words."

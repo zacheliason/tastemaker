@@ -15,6 +15,7 @@ from .storage import SupabaseStorage
 
 MODEL = "gpt-5.6-luna"
 logger = logging.getLogger(__name__)
+TASTE_CATEGORIES = {"art", "home_decor", "clothing"}
 
 
 class OpenAIJudge:
@@ -116,9 +117,16 @@ def _title_gate_batch(judge: OpenAIJudge, batch: list[dict], searches: dict[str,
         logger.info("OpenAI title gate batch=%s listings=%d", batch_label, len(batch))
         result = judge.complete([{
             "role": "system",
-            "content": instructions or "Screen listings against their configured search. Return JSON object with key results, an array of objects containing external_id, pass (boolean), and reason (one sentence). Reject clear title/spec mismatches; do not invent missing facts.",
+            "content": (instructions or "Screen listings against their configured search. Return JSON object with key results, an array of objects containing external_id, pass (boolean), reason (one sentence), and category. For category, choose exactly one of art, home_decor, or clothing based on the title. Reject clear title/spec mismatches; do not invent missing facts.") + " Assign each listing exactly one category: art, home_decor, or clothing, based on its title.",
         }, {"role": "user", "content": json.dumps(payload)}])
-        return {str(item["external_id"]): {"pass": bool(item.get("pass")), "reason": item.get("reason", "")} for item in result.get("results", [])}
+        output = {}
+        for item in result.get("results", []):
+            category = item.get("category")
+            result_item = {"pass": bool(item.get("pass")), "reason": item.get("reason", "")}
+            if category in TASTE_CATEGORIES:
+                result_item["category"] = category
+            output[str(item["external_id"])] = result_item
+        return output
 
 
 def taste_judgment(judge: OpenAIJudge, listing: dict, references: list[dict], instructions: str | None = None) -> dict:
@@ -178,7 +186,12 @@ def run_with_config(conn, config: dict, ai_config: dict, source: str | None = No
         if is_fast_tracked(listing, ai_config):
             taste = {"verdict": "like", "reason": "Fast-tracked by configured Invaluable subject rule; no LLM used."}
         elif title["pass"]:
-            category = search_map.get(listing["search_id"], {}).get("category", "art")
+            category = title.get("category") or search_map.get(listing["search_id"], {}).get("category")
+            if category not in TASTE_CATEGORIES:
+                taste = {"verdict": "uncertain", "reason": "Category could not be assigned"}
+                conn.execute("insert into ai_judgments (listing_id, model, title_input_sha256, title_pass, title_reason, taste_input_sha256, taste_verdict, taste_reason, judged_at) values (%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict (listing_id) do update set model=excluded.model, title_input_sha256=excluded.title_input_sha256, title_pass=excluded.title_pass, title_reason=excluded.title_reason, taste_input_sha256=excluded.taste_input_sha256, taste_verdict=excluded.taste_verdict, taste_reason=excluded.taste_reason, judged_at=excluded.judged_at", (listing["id"], judge.model, title_hash, title["pass"], title["reason"], None, taste["verdict"], taste["reason"], datetime.now(timezone.utc)))
+                processed += 1
+                continue
             refs = conn.execute("select label, description, storage_bucket, storage_path from taste_references where category = %s and active order by label, id limit 20", (category,)).fetchall()
             references = [{"label": r[0], "description": r[1], "url": storage.signed_url(r[2], r[3])} for r in refs if r[2] and r[3]]
             taste_instructions = ai_config.get("taste_judgment", {}).get("instructions")
