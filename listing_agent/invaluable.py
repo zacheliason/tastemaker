@@ -199,52 +199,8 @@ def parse_lot_page(html: str, fallback_url: str, search_id: str) -> Listing:
     )
 
 
-async def fetch_lot_page_browser(url: str, search_id: str) -> Listing:
-    from playwright.async_api import async_playwright
-
-    url = strip_query(url)
-
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(
-            headless=True,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        try:
-            page = await browser.new_page(
-                viewport={"width": 1365, "height": 900},
-                locale="en-US",
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            )
-            await page.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-            )
-            response = await page.goto(
-                url, wait_until="domcontentloaded", timeout=45_000
-            )
-            if response is None or response.status >= 500 or response.status == 404:
-                status = response.status if response else "no response"
-                raise RuntimeError(f"Invaluable browser request failed: HTTP {status}")
-            # CloudFront may need several seconds to complete its JavaScript
-            # check. Do not parse the challenge's placeholder as a real lot.
-            last_title = ""
-            for _ in range(12):
-                listing = parse_lot_page(await page.content(), url, search_id)
-                last_title = listing.title
-                if listing.raw_data and listing.title.lower() not in {
-                    "javascript is disabled",
-                    "access denied",
-                }:
-                    return listing
-                await page.wait_for_timeout(2_500)
-            raise RuntimeError(
-                f"Invaluable returned a browser challenge instead of lot data (title={last_title!r})"
-            )
-        finally:
-            await browser.close()
-
-
 def enrich_with_retry(
-    candidate: Listing, attempts: int = 2, provider: str = "playwright"
+    candidate: Listing, attempts: int = 2, provider: str = "zenrows"
 ) -> Listing:
     import asyncio
 
@@ -256,10 +212,6 @@ def enrich_with_retry(
 
                 enriched = asyncio.run(
                     fetch_lot_page(candidate.url, candidate.search_id)
-                )
-            elif provider == "playwright":
-                enriched = asyncio.run(
-                    fetch_lot_page_browser(candidate.url, candidate.search_id)
                 )
             else:
                 raise RuntimeError(f"Unknown enrichment provider: {provider}")
@@ -323,7 +275,7 @@ def fetch(search: dict) -> list[Listing]:
                     listings.append(candidate)
                     continue
                 enriched = enrich_with_retry(
-                    candidate, provider=search.get("enrichment_provider", "playwright")
+                    candidate, provider=search.get("enrichment_provider", "zenrows")
                 )
                 enriched.raw_data["email_subject"] = candidate.raw_data.get(
                     "email_subject", ""

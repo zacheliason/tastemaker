@@ -5,7 +5,7 @@
       "enabled": true,
       "adapter": "ebay",
       "account_saved_searches": true,
-      "max_price_usd": 100,
+      "max_price_usd": 10,
       "saved_search_defaults": {
         "limit": 25,
         "sort": "bestMatch"

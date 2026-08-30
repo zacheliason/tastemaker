@@ -1,4 +1,4 @@
-from listing_agent.ai import OpenAIJudge, is_fast_tracked, title_gate, taste_judgment
+from listing_agent.ai import OpenAIJudge, _taste_hash, _title_hash, is_fast_tracked, title_gate, taste_judgment
 
 
 class FakeJudge(OpenAIJudge):
@@ -22,6 +22,20 @@ def test_fast_track_uses_invaluable_email_subject():
     config = {"pre_llm_policy": {"invaluable": {"fast_track_subject_contains": ["Josef Albers"]}}}
     assert is_fast_tracked({"source": "invaluable", "raw_data": {"email_subject": "New pieces from Josef Albers"}}, config)
     assert not is_fast_tracked({"source": "invaluable", "raw_data": {"email_subject": "Mid century modern clocks"}}, config)
+
+
+def test_ai_hashes_ignore_volatile_source_metadata():
+    listing = {
+        "title": "A listing",
+        "description": "Description",
+        "size_fields": {"width": 20},
+        "image_urls": ["https://example.test/item.jpg"],
+        "raw_data": {"api_updated_at": "first"},
+    }
+    changed = {**listing, "raw_data": {"api_updated_at": "second", "view_count": 4}}
+    search = {"query": "listing", "category": "art"}
+    assert _title_hash(listing, search, "instructions", "model") == _title_hash(changed, search, "instructions", "model")
+    assert _taste_hash(listing, "art", {"weights": [1]}) == _taste_hash(changed, "art", {"weights": [1]})
 
 
 def test_taste_judgment_normalizes_invalid_verdict():

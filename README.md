@@ -130,7 +130,7 @@ Within each source’s `searches` array, edit:
 - `limit` is the maximum number of source results ingested; `max_price_usd` is the price threshold. They are not duplicates.
 - eBay listings are only inserted once, using the stable eBay item ID or normalized listing URL; previously seen items are not refreshed into the daily digest.
 - `category` must be `art`, `home_decor`, or `clothing` and selects the matching reference pool.
-- `enrichment_provider` selects the configured page-fetch adapter, such as `playwright` or authorized `zenrows`.
+- `enrichment_provider` selects the configured page-fetch adapter; this project uses authorized `zenrows`.
 - Set `enabled` to `false` to pause a search.
 
 Example Invaluable price limit:
@@ -176,7 +176,7 @@ Keep `art`, `home_decor`, and `clothing` pools separate. Each pool gets its own 
 
 Each scheduled run should:
 
-1. Install project dependencies and Playwright Chromium in the GitHub runner.
+1. Install project dependencies in the GitHub runner.
 2. Apply `db/schema.sql` safely.
 3. Ingest enabled eBay and Invaluable searches.
 4. Apply deterministic price, keyword, and size filters.

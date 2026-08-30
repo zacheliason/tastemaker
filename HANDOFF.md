@@ -33,7 +33,7 @@ This file is the source of truth for continuing work in a fresh LLM conversation
 
 - `listing_agent/models.py`: shared `Listing` dataclass with source, search, price/currency, USD conversion, URL, images, description, size fields, raw data, and sale end time.
 - `listing_agent/ebay.py`: OAuth token acquisition, Browse API search, and authenticated `GetMyeBayBuying` saved-search parsing. It supports refresh-token and client-credentials flows.
-- `listing_agent/invaluable.py`: IMAP ingestion, HTML alert parsing, JSON-LD lot parsing, Playwright enrichment, retry/fallback metadata, and existing-URL skipping.
+- `listing_agent/invaluable.py`: IMAP ingestion, HTML alert parsing, JSON-LD lot parsing, ZenRows enrichment, retry/fallback metadata, and existing-URL skipping.
 - `listing_agent/zenrows.py`: authorized ZenRows enrichment adapter with JavaScript rendering.
 - `listing_agent/pricing.py`: price parsing and FreeCurrencyAPI conversion to USD.
 - `listing_agent/db.py`: normalized, idempotent Postgres upserts and URL normalization.
@@ -65,7 +65,7 @@ This file is the source of truth for continuing work in a fresh LLM conversation
 
 ### Enrichment Verification
 
-- The Josef Albers lot URL once returned valid JSON-LD through Playwright:
+- The Josef Albers lot URL once returned valid JSON-LD through browser-based enrichment:
 
 ```text
 title: Josef Albers (1888 Bottrop - New Haven 1976)
@@ -75,7 +75,6 @@ images: 1
 ```
 
 - Ordinary `httpx` hit an Invaluable CloudFront/WAF challenge.
-- Playwright later intermittently returned `JavaScript is disabled`; challenge pages are detected and rejected.
 - ZenRows support is implemented but has not yet been proven against a real authorized remote run.
 - Enrichment defaults to two attempts in the current code, not four. Confirm whether two is sufficient before changing it.
 

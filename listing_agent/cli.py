@@ -45,13 +45,13 @@ def main() -> None:
         source_name = args.source or config.get("default_enrichment_source")
         if not source_name or source_name not in dict(configured_sources(config, enabled_only=False)):
             parser.error("enrich-url requires a configured --source")
-        adapter = adapter_for(config["sources"][source_name])
-        if not hasattr(adapter, "fetch_lot_page_browser"):
+        if source_name != "invaluable":
             parser.error(f"source adapter does not support URL enrichment: {source_name}")
         search_id = args.search_id or next((item["id"] for item in enabled_searches(config["sources"][source_name])), None)
         if not search_id:
             parser.error("enrich-url requires --search-id when the source has no enabled searches")
-        item = asyncio.run(adapter.fetch_lot_page_browser(args.url, search_id))
+        from .zenrows import fetch_lot_page
+        item = asyncio.run(fetch_lot_page(args.url, search_id))
         print(f"title: {item.title}")
         print(f"price: {item.price} {item.currency}")
         print(f"sale_end_at: {item.sale_end_at}")

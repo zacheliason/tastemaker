@@ -237,7 +237,28 @@ def is_fast_tracked(listing: dict, ai_config: dict) -> bool:
 
 
 def _title_hash(listing: dict, search: dict, instructions: str | None, model: str) -> str:
-    return _digest({"listing": listing, "search": search, "instructions": instructions, "model": model})
+    # Do not fingerprint raw_data: marketplace payloads commonly change metadata
+    # between fetches without changing the title-gate decision inputs.
+    return _digest({
+        "listing": {
+            "title": listing.get("title") or "",
+            "description": listing.get("description") or "",
+            "size_fields": listing.get("size_fields") or {},
+        },
+        "search": search,
+        "instructions": instructions,
+        "model": model,
+    })
+
+
+def _taste_hash(listing: dict, category: str, classifier_state: Any) -> str:
+    # Taste classification uses the listing images and reference classifier;
+    # volatile source metadata must not invalidate an unchanged judgment.
+    return _digest({
+        "image_urls": listing.get("image_urls") or [],
+        "category": category,
+        "classifier": classifier_state,
+    })
 
 
 def run_with_config(conn, config: dict, ai_config: dict, source: str | None = None) -> int:
@@ -306,7 +327,7 @@ def run_with_config(conn, config: dict, ai_config: dict, source: str | None = No
             if not is_fast_tracked(listing, ai_config) and category in TASTE_CATEGORIES:
                 classifier = _preference_classifier(conn, storage, category, classifier_cache)
                 classifier_state = classifier.__dict__ if classifier else None
-                taste_hash = _digest({"listing": listing, "category": category, "classifier": classifier_state})
+                taste_hash = _taste_hash(listing, category, classifier_state)
         existing = conn.execute("select title_input_sha256, taste_input_sha256 from ai_judgments where listing_id = %s", (listing["id"],)).fetchone()
         if existing and existing[0] == title_hash and (not title["pass"] or existing[1] == taste_hash):
             skipped += 1

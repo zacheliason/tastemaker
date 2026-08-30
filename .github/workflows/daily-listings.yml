@@ -53,8 +53,6 @@ jobs:
         run: |
           git rev-parse HEAD
           python -c 'import inspect, listing_agent.ai as ai; source=inspect.getsource(ai); print(inspect.getsourcefile(ai)); print("adaptive_ai_handler=" + str("content_chars" in source and "title_gate batch failed" in source))'
-      - name: Install Chromium
-        run: python -m playwright install --with-deps chromium
       - name: Apply database schema
         run: python -c 'import os; from pathlib import Path; import psycopg; conn=psycopg.connect(os.environ["DATABASE_URL"]); conn.execute(Path("db/schema.sql").read_text()); conn.commit(); conn.close()'
       - name: Ingest listing feedback

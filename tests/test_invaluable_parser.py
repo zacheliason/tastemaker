@@ -42,15 +42,15 @@ def test_parse_lot_page_reads_visible_auction_date():
     assert item.sale_end_at.hour == 10
 
 
-def test_enrichment_fallback_keeps_retry_reasons(monkeypatch):
+def test_zenrows_enrichment_fallback_keeps_retry_reasons(monkeypatch):
     async def fail(url, search_id):
-        raise RuntimeError("browser challenge detected")
+        raise RuntimeError("ZenRows request failed")
 
-    monkeypatch.setattr("listing_agent.invaluable.fetch_lot_page_browser", fail)
+    monkeypatch.setattr("listing_agent.zenrows.fetch_lot_page", fail)
     candidate = Listing("invaluable", "test", "id", "Lot", None, None, "https://example.test/lot")
     result = enrich_with_retry(candidate, attempts=2)
     assert result.raw_data["enrichment_status"] == "fallback_email"
     assert result.raw_data["enrichment_retry_errors"] == [
-        {"attempt": 1, "error": "browser challenge detected"},
-        {"attempt": 2, "error": "browser challenge detected"},
+        {"attempt": 1, "error": "ZenRows request failed"},
+        {"attempt": 2, "error": "ZenRows request failed"},
     ]
