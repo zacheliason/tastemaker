@@ -149,6 +149,43 @@ def taste_judgment(judge: OpenAIJudge, listing: dict, references: list[dict], in
     return {"verdict": verdict, "reason": result.get("reason", "")}
 
 
+def _nearest_references(conn, storage, listing: dict, category: str, limit: int, pool_limit: int, cache: dict) -> list[dict]:
+    from .embeddings import cosine_similarity, image_embedding
+
+    if category not in cache:
+        rows = conn.execute("select id, label, description, storage_bucket, storage_path, embedding from taste_references where category = %s and active order by label, id limit %s", (category, pool_limit)).fetchall()
+        references = []
+        for row in rows:
+            if not row[3] or not row[4]:
+                continue
+            reference = {"id": row[0], "label": row[1], "description": row[2], "url": storage.signed_url(row[3], row[4]), "embedding": row[5]}
+            if reference["embedding"] is None:
+                try:
+                    reference["embedding"] = image_embedding(reference["url"])
+                    conn.execute("update taste_references set embedding = %s::jsonb where id = %s", (json.dumps(reference["embedding"]), reference["id"]))
+                except Exception as exc:
+                    logger.warning("Reference embedding failed; using reference order: category=%s id=%s error=%s", category, reference["id"], exc)
+            references.append(reference)
+        cache[category] = references
+
+    references = cache[category]
+    image_urls = listing.get("image_urls") or []
+    if not image_urls or not references:
+        return references[:limit]
+    try:
+        listing_embedding = image_embedding(image_urls[0])
+        ranked = sorted(
+            references,
+            key=lambda reference: cosine_similarity(listing_embedding, reference["embedding"])
+            if reference.get("embedding") else float("-inf"),
+            reverse=True,
+        )
+        return ranked[:limit]
+    except Exception as exc:
+        logger.warning("Listing embedding failed; using reference order: external_id=%s error=%s", listing.get("external_id"), exc)
+        return references[:limit]
+
+
 def is_fast_tracked(listing: dict, ai_config: dict) -> bool:
     policy = ai_config.get("pre_llm_policy", {}).get(listing["source"], {})
     subject = (listing.get("raw_data") or {}).get("email_subject", "").lower()
@@ -169,6 +206,9 @@ def run_with_config(conn, config: dict, ai_config: dict, source: str | None = No
         usage = judge.last_usage
         conn.execute("insert into llm_usage (listing_id, operation, model, prompt_tokens, completion_tokens, total_tokens, listing_count) values (%s,'title_gate',%s,%s,%s,%s,%s)", (llm_listings[0]["id"], judge.model, usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"], len(llm_listings)))
     processed = 0
+    reference_cache = {}
+    reference_limit = max(1, int(ai_config.get("reference_limit", 6)))
+    reference_pool_limit = max(reference_limit, int(ai_config.get("reference_pool_limit", 100)))
     for listing in listings:
         title = title_results.get(listing["external_id"], {"pass": False, "reason": "No title-gate result"})
         title_instructions = ai_config.get("title_gate", {}).get("instructions")
@@ -192,8 +232,7 @@ def run_with_config(conn, config: dict, ai_config: dict, source: str | None = No
                 conn.execute("insert into ai_judgments (listing_id, model, title_input_sha256, title_pass, title_reason, taste_input_sha256, taste_verdict, taste_reason, judged_at) values (%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict (listing_id) do update set model=excluded.model, title_input_sha256=excluded.title_input_sha256, title_pass=excluded.title_pass, title_reason=excluded.title_reason, taste_input_sha256=excluded.taste_input_sha256, taste_verdict=excluded.taste_verdict, taste_reason=excluded.taste_reason, judged_at=excluded.judged_at", (listing["id"], judge.model, title_hash, title["pass"], title["reason"], None, taste["verdict"], taste["reason"], datetime.now(timezone.utc)))
                 processed += 1
                 continue
-            refs = conn.execute("select label, description, storage_bucket, storage_path from taste_references where category = %s and active order by label, id limit 20", (category,)).fetchall()
-            references = [{"label": r[0], "description": r[1], "url": storage.signed_url(r[2], r[3])} for r in refs if r[2] and r[3]]
+            references = _nearest_references(conn, storage, listing, category, reference_limit, reference_pool_limit, reference_cache)
             taste_instructions = ai_config.get("taste_judgment", {}).get("instructions")
             taste_hash = _digest({"listing": listing, "references": references, "instructions": taste_instructions, "model": judge.model})
             taste = taste_judgment(judge, listing, references, taste_instructions) if references else {"verdict": "uncertain", "reason": "No portable references available"}

@@ -120,3 +120,26 @@ def test_saved_searches_uses_account_values_over_defaults(monkeypatch):
     assert len(results) == 1
     assert results[0]["query"] == "mid century modern clocks"
     assert results[0]["max_price_usd"] == 1
+
+
+def test_saved_searches_uses_result_defaults(monkeypatch):
+    monkeypatch.setenv("EBAY_CLIENT_ID", "client")
+    monkeypatch.setenv("EBAY_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("EBAY_REFRESH_TOKEN", "refresh")
+
+    class Response:
+        text = '''<GetMyeBayBuyingResponse xmlns="urn:ebay:apis:eBLBaseComponents">
+          <FavoriteSearches><FavoriteSearch><SearchName>Clocks</SearchName><SearchQuery>clocks</SearchQuery></FavoriteSearch></FavoriteSearches>
+        </GetMyeBayBuyingResponse>'''
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"access_token": "access"}
+
+    monkeypatch.setattr("listing_agent.ebay.httpx.post", lambda *args, **kwargs: Response())
+    result = ebay.saved_searches({"limit": 25, "sort": "bestMatch"})[0]
+
+    assert result["limit"] == 25
+    assert result["sort"] == "bestMatch"

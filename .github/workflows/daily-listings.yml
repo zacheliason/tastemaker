@@ -42,6 +42,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Cache CLIP model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: clip-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
       - name: Install dependencies
         run: python -m pip install .
       - name: Verify checked-out AI implementation

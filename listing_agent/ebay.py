@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import logging
-import httpx
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from urllib.parse import parse_qs, unquote, urlsplit
+
+import httpx
 
 from .config import required_env
 from .models import Listing
 from .pricing import parse_price, to_usd
 from .urls import strip_query
-
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,10 @@ def _access_token() -> str:
         response = httpx.post(
             "https://api.ebay.com/identity/v1/oauth2/token",
             auth=(env["EBAY_CLIENT_ID"], env["EBAY_CLIENT_SECRET"]),
-            data={"grant_type": "client_credentials", "scope": "https://api.ebay.com/oauth/api_scope"},
+            data={
+                "grant_type": "client_credentials",
+                "scope": "https://api.ebay.com/oauth/api_scope",
+            },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             timeout=30,
         )
@@ -65,8 +68,11 @@ def _access_token() -> str:
 def saved_searches(defaults: dict | None = None) -> list[dict]:
     """Read the authenticated buyer's Saved Searches from Trading API."""
     import os
+
     if not os.environ.get("EBAY_REFRESH_TOKEN"):
-        raise RuntimeError("EBAY_REFRESH_TOKEN is required to read eBay account saved searches")
+        raise RuntimeError(
+            "EBAY_REFRESH_TOKEN is required to read eBay account saved searches"
+        )
     token = _access_token()
     response = httpx.post(
         "https://api.ebay.com/ws/api.dll",
@@ -91,19 +97,25 @@ def saved_searches(defaults: dict | None = None) -> list[dict]:
         query = value("SearchQuery") or value("QueryKeywords") or ""
         if not query:
             continue
-        output.append({
-            **(defaults or {}),
-            "id": "ebay-saved-" + (value("SearchName") or query).lower().replace(" ", "-")[:80],
-            "query": _keywords(query),
-            "limit": 100,
-            "category_ids": [value("CategoryID")] if value("CategoryID") else [],
-            "exclude_keywords": [],
-        })
+        output.append(
+            {
+                **(defaults or {}),
+                "id": "ebay-saved-"
+                + (value("SearchName") or query).lower().replace(" ", "-")[:80],
+                "query": _keywords(query),
+                "limit": (defaults or {}).get("limit", 10),
+                "category_ids": [value("CategoryID")] if value("CategoryID") else [],
+                "exclude_keywords": [],
+            }
+        )
     logger.info("eBay saved searches imported: %d", len(output))
     for search in output:
         logger.info(
             "eBay saved search: id=%s query=%r category=%s max_price_usd=%s",
-            search["id"], search["query"], search.get("category"), search.get("max_price_usd"),
+            search["id"],
+            search["query"],
+            search.get("category"),
+            search.get("max_price_usd"),
         )
     return output
 
@@ -118,14 +130,23 @@ def fetch(search: dict) -> list[Listing]:
     offset = 0
     while len(listings) < requested:
         page_limit = min(200, requested - len(listings))
-        params = {"q": _keywords(search["query"]), "limit": page_limit, "offset": offset}
+        params = {
+            "q": _keywords(search["query"]),
+            "limit": page_limit,
+            "offset": offset,
+        }
+        if search.get("sort"):
+            params["sort"] = search["sort"]
         category_ids = [str(value) for value in search.get("category_ids", []) if value]
         if category_ids:
             params["category_ids"] = ",".join(category_ids)
         response = httpx.get(
             "https://api.ebay.com/buy/browse/v1/item_summary/search",
             params=params,
-            headers={"Authorization": f"Bearer {token}", "X-EBAY-C-MARKETPLACE-ID": marketplace},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-EBAY-C-MARKETPLACE-ID": marketplace,
+            },
             timeout=30,
         )
         response.raise_for_status()
@@ -142,13 +163,22 @@ def fetch(search: dict) -> list[Listing]:
             image = strip_query(item.get("image", {}).get("imageUrl"))
             amount, currency = parse_price(price.get("value"), price.get("currency"))
             end_at = item.get("itemEndDate") or item.get("endDate")
-            listings.append(Listing(
-                source="ebay", search_id=search["id"], external_id=external_id,
-                title=item.get("title", ""), price=amount,
-                currency=currency, price_usd=to_usd(amount, currency), url=strip_query(item.get("itemWebUrl", "")),
-                image_urls=[image] if image else [], description=item.get("shortDescription", ""),
-                raw_data={**item, "_search_config": search}, sale_end_at=_parse_end_date(end_at),
-            ))
+            listings.append(
+                Listing(
+                    source="ebay",
+                    search_id=search["id"],
+                    external_id=external_id,
+                    title=item.get("title", ""),
+                    price=amount,
+                    currency=currency,
+                    price_usd=to_usd(amount, currency),
+                    url=strip_query(item.get("itemWebUrl", "")),
+                    image_urls=[image] if image else [],
+                    description=item.get("shortDescription", ""),
+                    raw_data={**item, "_search_config": search},
+                    sale_end_at=_parse_end_date(end_at),
+                )
+            )
             if len(listings) >= requested:
                 break
         offset += len(items)

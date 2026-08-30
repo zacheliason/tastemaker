@@ -11,6 +11,8 @@ dependencies = [
   "playwright>=1.45,<2",
   "Pillow>=10,<12",
   "pillow-heif>=0.18,<1",
+  "torch>=2.3,<3",
+  "transformers>=4.45,<5",
 ]
 
 [build-system]

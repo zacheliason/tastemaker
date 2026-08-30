@@ -6,6 +6,10 @@
       "adapter": "ebay",
       "account_saved_searches": true,
       "max_price_usd": 100,
+      "saved_search_defaults": {
+        "limit": 25,
+        "sort": "bestMatch"
+      },
       "searches": [
         {
           "id": "ebay-rl-cream-pleated-trousers-w30",

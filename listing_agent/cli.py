@@ -133,7 +133,7 @@ def main() -> None:
         else:
             searches = enabled_searches(settings)
         for search in searches:
-            effective_search = dict(search)
+            effective_search = {**(settings.get("saved_search_defaults") or {}), **search}
             if settings.get("enrichment_provider"):
                 effective_search["enrichment_provider"] = settings["enrichment_provider"]
             if "max_price_usd" in settings:

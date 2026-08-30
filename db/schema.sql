@@ -43,6 +43,7 @@ create table if not exists taste_references (
   image_height integer,
   description text not null default '',
   active boolean not null default true,
+  embedding jsonb,
   created_at timestamptz not null default now()
 );
 
@@ -53,6 +54,7 @@ alter table taste_references add column if not exists storage_bucket text;
 alter table taste_references add column if not exists storage_path text;
 alter table taste_references add column if not exists image_width integer;
 alter table taste_references add column if not exists image_height integer;
+alter table taste_references add column if not exists embedding jsonb;
 
 create table if not exists ai_judgments (
   listing_id bigint primary key references listings(id) on delete cascade,

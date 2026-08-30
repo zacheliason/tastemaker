@@ -95,6 +95,7 @@ Within each source’s `searches` array, edit:
 
 - eBay uses the official Browse API; eBay pages are not scraped.
 - Set `max_price_usd` once on each source to apply a local USD price cap to all of that source's searches.
+- eBay account searches support source-level `saved_search_defaults`, including `limit` and Browse API `sort` (for example, `bestMatch`), to control how many ranked results are ingested per search.
 - Set `account_saved_searches` to `true` to retrieve the authenticated eBay buyer's Saved Searches through `GetMyeBayBuying`; this requires `EBAY_REFRESH_TOKEN`.
 - When `account_saved_searches` is enabled, the account's saved searches are the complete eBay search set; entries in that source's `searches` array are ignored.
 - Invaluable uses listing-alert emails from the configured inbox.
@@ -119,6 +120,8 @@ Edit `config/ai.json`.
 - `title_gate.instructions`: title and structured-spec screening prompt
 - `taste_judgment.instructions`: category-specific visual comparison prompt
 - `max_completion_tokens`: output budget
+- `reference_limit`: maximum number of same-category reference images sent to each taste judgment; references are loaded and signed once per category per run.
+- `reference_pool_limit`: maximum number of same-category references considered by the CLIP nearest-neighbor selector. Reference embeddings are persisted in `taste_references` and generated only once.
 - `pre_llm_policy`: deterministic bypass rules
 
 Fast-track matching Invaluable email subjects are accepted without any OpenAI call. eBay and unmatched generic Invaluable subjects use the LLM path.
