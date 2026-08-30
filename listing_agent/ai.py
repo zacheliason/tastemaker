@@ -19,10 +19,11 @@ TASTE_CATEGORIES = {"art", "home_decor", "clothing"}
 
 
 class OpenAIJudge:
-    def __init__(self, api_key: str | None = None, model: str | None = None, max_completion_tokens: int = 80):
+    def __init__(self, api_key: str | None = None, model: str | None = None, max_completion_tokens: int | None = None):
         self.api_key = api_key or required_env("OPENAI_API_KEY")["OPENAI_API_KEY"]
         self.model = model or os.environ.get("OPENAI_MODEL", MODEL)
-        self.max_completion_tokens = int(os.environ.get("OPENAI_MAX_COMPLETION_TOKENS", max_completion_tokens))
+        configured_budget = max_completion_tokens if max_completion_tokens is not None else os.environ.get("OPENAI_MAX_COMPLETION_TOKENS", 80)
+        self.max_completion_tokens = int(configured_budget)
         self.last_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     def complete(self, messages: list[dict[str, Any]]) -> Any:
@@ -296,7 +297,7 @@ def run_with_config(conn, config: dict, ai_config: dict, source: str | None = No
             stored_titles[listing["external_id"]] = {"pass": existing[1], "reason": existing[2] or "", "category": existing[3]}
         else:
             llm_listings.append(listing)
-    judge = OpenAIJudge(model=model, max_completion_tokens=ai_config.get("max_completion_tokens", 80)) if llm_listings else None
+    judge = OpenAIJudge(model=model, max_completion_tokens=ai_config.get("max_completion_tokens")) if llm_listings else None
 
     def checkpoint_titles(batch, batch_results):
         for listing in batch:
