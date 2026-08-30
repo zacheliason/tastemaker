@@ -13,6 +13,9 @@ import httpx
 from .config import required_env
 
 
+MAX_INLINE_ATTACHMENTS = 500
+
+
 def _feedback_link(address: str, action: str, source: str, external_id: str, title: str) -> str:
     subject = f"Listing feedback: {action}"
     body = f"action={action}\nsource={source}\nexternal_id={external_id}\ntitle={title}"
@@ -49,6 +52,10 @@ def _pretty_date(value: datetime) -> str:
     return value.strftime("%B %d, %Y").replace(" 0", " ")
 
 
+def _category_label(category: str | None) -> str:
+    return (category or "Not assigned").replace("_", " ").title()
+
+
 def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient: str | None = None, usage: dict | None = None, image_sources: dict[str, str] | None = None) -> tuple[str, str]:
     feedback_recipient = feedback_recipient or recipient
     grouped = {}
@@ -71,10 +78,12 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
             like = _feedback_link(feedback_recipient, "like", row["source"], row["external_id"], row["title"])
             dislike = _feedback_link(feedback_recipient, "dislike", row["source"], row["external_id"], row["title"])
             remaining = _remaining(row.get("sale_end_at"))
+            category = _category_label(row.get("category"))
+            classifier = f"{category} preference classifier" if row.get("category") else "None"
             text.extend([row["title"], _price(row["price"], row["currency"], row["price_usd"]), row["url"]])
             if remaining:
                 text.append(remaining)
-            text.extend([f"Verdict: {row['taste_verdict']}. {reason}", f"Like: {like}", f"Dislike: {dislike}", ""])
+            text.extend([f"Category: {category}", f"Classifier used: {classifier}", f"Verdict: {row['taste_verdict']}. {reason}", f"Like: {like}", f"Dislike: {dislike}", ""])
             image = row["image_urls"][0] if row["image_urls"] else ""
             image_source = (image_sources or {}).get(row["external_id"], image)
             image_html = f'<img src="{html.escape(image_source, quote=True)}" alt="Listing image" width="320" style="display:block;width:100%;max-width:320px;height:auto;max-height:240px;object-fit:contain"><br>' if image_source else ""
@@ -83,9 +92,10 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
             filtered_label = '<p style="margin:0 0 10px;color:#a14d45;font-size:10px;font-weight:700;letter-spacing:1.5px">FILTERED</p>' if filtered else ""
             blocks.append(f'''<div style="margin:0 0 16px;padding:18px;background:#fffefa;border:1px solid {card_border};border-radius:8px;box-shadow:0 2px 8px rgba(50,40,30,.04)">
  {image_html}{filtered_label}<h3 style="margin:12px 0 6px;font-family:Georgia,'Times New Roman',serif;font-size:20px;font-weight:400;line-height:1.25"><a style="color:#252321;text-decoration:none" href="{html.escape(row['url'], quote=True)}">{html.escape(row['title'])}</a></h3>
-<p style="margin:0 0 4px;font-size:13px;color:#514b45">{html.escape(_price(row['price'], row['currency'], row['price_usd']))}</p>
-{f'<p style="margin:0 0 10px;font-size:12px;color:#8a8177;letter-spacing:.2px">{html.escape(remaining)}</p>' if remaining else ''}
-<p style="margin:0 0 16px;font-size:14px;color:#514b45">{html.escape(reason)}</p>
+ <p style="margin:0 0 4px;font-size:13px;color:#514b45">{html.escape(_price(row['price'], row['currency'], row['price_usd']))}</p>
+ {f'<p style="margin:0 0 10px;font-size:12px;color:#8a8177;letter-spacing:.2px">{html.escape(remaining)}</p>' if remaining else ''}
+ <p style="margin:0 0 10px;font-size:12px;color:#756d65">Category: <strong>{html.escape(category)}</strong><br>Classifier used: <strong>{html.escape(classifier)}</strong></p>
+ <p style="margin:0 0 16px;font-size:14px;color:#514b45">{html.escape(reason)}</p>
 <p style="margin:0;font-size:13px"><a style="display:inline-block;padding:7px 12px;border:1px solid #b9aa98;border-radius:4px;color:#514b45;text-decoration:none" href="{html.escape(like, quote=True)}">Like</a>&nbsp;&nbsp;<a style="display:inline-block;padding:7px 12px;border:1px solid #b9aa98;border-radius:4px;color:#514b45;text-decoration:none" href="{html.escape(dislike, quote=True)}">Dislike</a></p>
 </div>''')
     if not rows:
@@ -102,12 +112,12 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
 def fetch_rows(conn, start: datetime, include_filtered: bool = False) -> list[dict]:
     rows = conn.execute("""select l.source, l.external_id, l.title, l.price, l.currency, l.price_usd,
         l.url, l.image_urls, l.sale_end_at, l.filter_status, l.filter_reason,
-        j.title_reason, j.title_pass, j.taste_verdict, j.taste_reason
+        j.title_reason, j.title_pass, j.category, j.taste_verdict, j.taste_reason
         from listings l left join ai_judgments j on j.listing_id = l.id
         where l.fetched_at >= %s and ((l.filter_status = 'passed' and j.title_pass = true and j.taste_verdict in ('like', 'uncertain'))
           or (%s and l.filter_status = 'filtered'))
         order by l.filter_status, l.source, l.fetched_at desc""", (start, include_filtered)).fetchall()
-    keys = ("source", "external_id", "title", "price", "currency", "price_usd", "url", "image_urls", "sale_end_at", "filter_status", "filter_reason", "title_reason", "title_pass", "taste_verdict", "taste_reason")
+    keys = ("source", "external_id", "title", "price", "currency", "price_usd", "url", "image_urls", "sale_end_at", "filter_status", "filter_reason", "title_reason", "title_pass", "category", "taste_verdict", "taste_reason")
     output = [dict(zip(keys, row)) for row in rows]
     for row in output:
         row["section"] = "Passed" if row["filter_status"] == "passed" else "Filtered"
@@ -125,6 +135,8 @@ def download_images(rows: list[dict]) -> tuple[dict[str, str], list[tuple[str, b
     """Fetch images only in memory for this message; do not retain marketplace images."""
     sources, attachments = {}, []
     for row in rows:
+        if len(attachments) >= MAX_INLINE_ATTACHMENTS:
+            break
         url = (row.get("image_urls") or [None])[0]
         if not url or not url.lower().startswith("https://"):
             continue

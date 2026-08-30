@@ -79,7 +79,7 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def title_gate(judge: OpenAIJudge, listings: list[dict], searches: dict[str, dict], instructions: str | None = None) -> dict[str, dict]:
+def title_gate(judge: OpenAIJudge, listings: list[dict], searches: dict[str, dict], instructions: str | None = None, on_batch=None) -> dict[str, dict]:
     if not listings:
         return {}
     batch_size = max(1, int(os.environ.get("OPENAI_TITLE_BATCH_SIZE", "5")))
@@ -101,6 +101,8 @@ def title_gate(judge: OpenAIJudge, listings: list[dict], searches: dict[str, dic
                 logger.error("OpenAI title gate failed; treating listing as rejected: external_id=%s error=%s", batch[0]["external_id"], exc)
                 batch_results = {}
         results.update(batch_results)
+        if on_batch:
+            on_batch(batch, batch_results)
     return results
 
 
@@ -234,6 +236,10 @@ def is_fast_tracked(listing: dict, ai_config: dict) -> bool:
     return any(term.lower() in subject for term in policy.get("fast_track_subject_contains", []))
 
 
+def _title_hash(listing: dict, search: dict, instructions: str | None, model: str) -> str:
+    return _digest({"listing": listing, "search": search, "instructions": instructions, "model": model})
+
+
 def run_with_config(conn, config: dict, ai_config: dict, source: str | None = None) -> int:
     storage = SupabaseStorage()
     source_clause = "" if source is None else " and source = %s"
@@ -242,9 +248,41 @@ def run_with_config(conn, config: dict, ai_config: dict, source: str | None = No
     listings = [{"id": r[0], "source": r[1], "search_id": r[2], "external_id": r[3], "title": r[4], "description": r[5], "size_fields": r[6] or {}, "image_urls": r[7] or [], "raw_data": r[8] or {}, "search": (r[8] or {}).get("_search_config", {})} for r in rows]
     logger.info("AI candidates: source=%s filter_status=passed count=%d", source or "all", len(listings))
     search_map = {item["id"]: item for _, settings in configured_sources(config) for item in enabled_searches(settings)}
-    llm_listings = [listing for listing in listings if not is_fast_tracked(listing, ai_config)]
-    judge = OpenAIJudge(model=ai_config.get("model", MODEL), max_completion_tokens=ai_config.get("max_completion_tokens", 80)) if llm_listings else None
-    title_results = title_gate(judge, llm_listings, search_map, ai_config.get("title_gate", {}).get("instructions")) if judge else {}
+    model = ai_config.get("model", MODEL)
+    title_instructions = ai_config.get("title_gate", {}).get("instructions")
+    stored_titles = {}
+    llm_listings = []
+    for listing in listings:
+        if is_fast_tracked(listing, ai_config):
+            continue
+        title_hash = _title_hash(listing, search_map.get(listing["search_id"], {}), title_instructions, model)
+        existing = conn.execute("select title_input_sha256, title_pass, title_reason, category, taste_input_sha256, taste_verdict, taste_reason from ai_judgments where listing_id = %s", (listing["id"],)).fetchone()
+        if existing and existing[0] == title_hash and existing[1] is not None:
+            stored_titles[listing["external_id"]] = {"pass": existing[1], "reason": existing[2] or "", "category": existing[3]}
+        else:
+            llm_listings.append(listing)
+    judge = OpenAIJudge(model=model, max_completion_tokens=ai_config.get("max_completion_tokens", 80)) if llm_listings else None
+
+    def checkpoint_titles(batch, batch_results):
+        for listing in batch:
+            result = batch_results.get(listing["external_id"])
+            if not result:
+                continue
+            conn.execute("""insert into ai_judgments
+                (listing_id, model, title_input_sha256, title_pass, title_reason, category, judged_at)
+                values (%s,%s,%s,%s,%s,%s,%s)
+                on conflict (listing_id) do update set model=excluded.model,
+                title_input_sha256=excluded.title_input_sha256, title_pass=excluded.title_pass,
+                title_reason=excluded.title_reason, category=excluded.category, taste_input_sha256=null,
+                taste_verdict=null, taste_reason=null, judged_at=excluded.judged_at""", (
+                    listing["id"], model, _title_hash(listing, search_map.get(listing["search_id"], {}), title_instructions, model),
+                    result["pass"], result["reason"], result.get("category"), datetime.now(timezone.utc),
+                ))
+        conn.commit()
+
+    title_results = dict(stored_titles)
+    if judge:
+        title_results.update(title_gate(judge, llm_listings, search_map, title_instructions, checkpoint_titles))
     logger.info("AI title results: candidates=%d results=%d fast_tracked=%d", len(llm_listings), len(title_results), len(listings) - len(llm_listings))
     if judge and llm_listings:
         usage = judge.last_usage
@@ -254,19 +292,18 @@ def run_with_config(conn, config: dict, ai_config: dict, source: str | None = No
     classifier_cache = {}
     for listing in listings:
         title = title_results.get(listing["external_id"], {"pass": False, "reason": "No title-gate result"})
-        title_instructions = ai_config.get("title_gate", {}).get("instructions")
         if is_fast_tracked(listing, ai_config):
             title = {"pass": True, "reason": "Fast-tracked by configured Invaluable subject rule."}
             title_hash = _digest({"listing": listing, "policy": "fast-track"})
         else:
-            title_hash = _digest({"listing": listing, "search": search_map.get(listing["search_id"], {}), "instructions": title_instructions, "model": judge.model})
+            title_hash = _title_hash(listing, search_map.get(listing["search_id"], {}), title_instructions, model)
             title = title_results.get(listing["external_id"], {"pass": False, "reason": "No title-gate result"})
         taste = None
         taste_hash = None
         category = None
-        if title["pass"] and not is_fast_tracked(listing, ai_config):
+        if title["pass"]:
             category = title.get("category") or search_map.get(listing["search_id"], {}).get("category")
-            if category in TASTE_CATEGORIES:
+            if not is_fast_tracked(listing, ai_config) and category in TASTE_CATEGORIES:
                 classifier = _preference_classifier(conn, storage, category, classifier_cache)
                 classifier_state = classifier.__dict__ if classifier else None
                 taste_hash = _digest({"listing": listing, "category": category, "classifier": classifier_state})
@@ -279,8 +316,9 @@ def run_with_config(conn, config: dict, ai_config: dict, source: str | None = No
         elif title["pass"]:
             if category not in TASTE_CATEGORIES:
                 taste = {"verdict": "uncertain", "reason": "Category could not be assigned"}
-                conn.execute("insert into ai_judgments (listing_id, model, title_input_sha256, title_pass, title_reason, taste_input_sha256, taste_verdict, taste_reason, judged_at) values (%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict (listing_id) do update set model=excluded.model, title_input_sha256=excluded.title_input_sha256, title_pass=excluded.title_pass, title_reason=excluded.title_reason, taste_input_sha256=excluded.taste_input_sha256, taste_verdict=excluded.taste_verdict, taste_reason=excluded.taste_reason, judged_at=excluded.judged_at", (listing["id"], judge.model, title_hash, title["pass"], title["reason"], None, taste["verdict"], taste["reason"], datetime.now(timezone.utc)))
+                conn.execute("insert into ai_judgments (listing_id, model, title_input_sha256, title_pass, title_reason, category, taste_input_sha256, taste_verdict, taste_reason, judged_at) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict (listing_id) do update set model=excluded.model, title_input_sha256=excluded.title_input_sha256, title_pass=excluded.title_pass, title_reason=excluded.title_reason, category=excluded.category, taste_input_sha256=excluded.taste_input_sha256, taste_verdict=excluded.taste_verdict, taste_reason=excluded.taste_reason, judged_at=excluded.judged_at", (listing["id"], judge.model, title_hash, title["pass"], title["reason"], category, None, taste["verdict"], taste["reason"], datetime.now(timezone.utc)))
                 processed += 1
+                conn.commit()
                 continue
             taste = embedding_taste_judgment(conn, storage, listing, category, classifier)
         logger.info(
@@ -289,10 +327,11 @@ def run_with_config(conn, config: dict, ai_config: dict, source: str | None = No
             title.get("category") or (category if title["pass"] else None),
             taste["verdict"] if taste else None, taste["reason"] if taste else None,
         )
-        conn.execute("""insert into ai_judgments (listing_id, model, title_input_sha256, title_pass, title_reason, taste_input_sha256, taste_verdict, taste_reason, judged_at)
-          values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-          on conflict (listing_id) do update set model=excluded.model, title_input_sha256=excluded.title_input_sha256, title_pass=excluded.title_pass, title_reason=excluded.title_reason, taste_input_sha256=excluded.taste_input_sha256, taste_verdict=excluded.taste_verdict, taste_reason=excluded.taste_reason, judged_at=excluded.judged_at""", (listing["id"], judge.model if judge else ai_config.get("model", MODEL), title_hash, title["pass"], title["reason"], taste_hash, taste["verdict"] if taste else None, taste["reason"] if taste else None, datetime.now(timezone.utc)))
+        conn.execute("""insert into ai_judgments (listing_id, model, title_input_sha256, title_pass, title_reason, category, taste_input_sha256, taste_verdict, taste_reason, judged_at)
+          values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+          on conflict (listing_id) do update set model=excluded.model, title_input_sha256=excluded.title_input_sha256, title_pass=excluded.title_pass, title_reason=excluded.title_reason, category=excluded.category, taste_input_sha256=excluded.taste_input_sha256, taste_verdict=excluded.taste_verdict, taste_reason=excluded.taste_reason, judged_at=excluded.judged_at""", (listing["id"], judge.model if judge else ai_config.get("model", MODEL), title_hash, title["pass"], title["reason"], category, taste_hash, taste["verdict"] if taste else None, taste["reason"] if taste else None, datetime.now(timezone.utc)))
         processed += 1
+        conn.commit()
     persisted = conn.execute(
         "select count(*) from ai_judgments where listing_id = any(%s)",
         ([listing["id"] for listing in listings],),

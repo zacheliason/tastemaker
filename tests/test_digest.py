@@ -37,17 +37,59 @@ def test_download_images_keeps_content_in_memory(monkeypatch):
     assert attachments[0][1] == b"jpeg-bytes"
 
 
+def test_download_images_caps_inline_attachments(monkeypatch):
+    from listing_agent.digest import MAX_INLINE_ATTACHMENTS, download_images
+
+    class Response:
+        headers = {"content-type": "image/jpeg"}
+        content = b"jpeg-bytes"
+
+        def raise_for_status(self):
+            return None
+
+    calls = 0
+
+    def get_image(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return Response()
+
+    monkeypatch.setattr("listing_agent.digest.httpx.get", get_image)
+    rows = [
+        {"external_id": str(index), "image_urls": [f"https://example.test/{index}.jpg"]}
+        for index in range(MAX_INLINE_ATTACHMENTS + 1)
+    ]
+
+    sources, attachments = download_images(rows)
+
+    assert len(attachments) == MAX_INLINE_ATTACHMENTS
+    assert len(sources) == MAX_INLINE_ATTACHMENTS
+    assert calls == MAX_INLINE_ATTACHMENTS
+
+
 def test_render_groups_listing_and_adds_feedback_links():
     text, markup = render([{
         "source": "ebay", "external_id": "abc", "title": "Cream trousers",
         "price": "80.00", "currency": "USD", "price_usd": "80.00",
         "url": "https://example.test/item", "image_urls": ["https://example.test/image.jpg"],
-        "title_reason": "Matches size.", "taste_verdict": "like", "taste_reason": "Strong match."
+        "title_reason": "Matches size.", "category": "home_decor", "taste_verdict": "like", "taste_reason": "Strong match."
     }], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc), "feedback@example.com")
     assert "Cream trousers" in text
     assert "Like: mailto:feedback@example.com" in text
     assert "Dislike" in markup
     assert "image.jpg" in markup
+    assert "Category: Home Decor" in text
+    assert "Classifier used: <strong>Home Decor preference classifier</strong>" in markup
+
+
+def test_render_shows_when_no_classifier_was_used():
+    _, markup = render([{
+        "source": "invaluable", "external_id": "fast-1", "title": "Fast tracked lot",
+        "price": "50.00", "currency": "USD", "price_usd": "50.00", "url": "https://example.test/item",
+        "image_urls": [], "taste_verdict": "like", "category": None,
+    }], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc))
+    assert "Category: <strong>Not Assigned</strong>" in markup
+    assert "Classifier used: <strong>None</strong>" in markup
 
 
 def test_render_empty_digest():

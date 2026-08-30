@@ -62,6 +62,7 @@ create table if not exists ai_judgments (
   title_input_sha256 text not null,
   title_pass boolean,
   title_reason text,
+  category text check (category in ('art', 'home_decor', 'clothing')),
   taste_input_sha256 text,
   taste_verdict text check (taste_verdict in ('like', 'dislike', 'uncertain')),
   taste_reason text,
@@ -89,3 +90,15 @@ create table if not exists llm_usage (
 );
 
 create index if not exists llm_usage_recorded_at_idx on llm_usage (recorded_at desc);
+
+alter table ai_judgments add column if not exists category text;
+
+create table if not exists feedback_events (
+  event_key text primary key,
+  message_id text not null,
+  listing_id bigint not null references listings(id) on delete cascade,
+  action text not null check (action in ('like', 'dislike')),
+  source text not null,
+  external_id text not null,
+  processed_at timestamptz not null default now()
+);

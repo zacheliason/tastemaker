@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["ingest", "filter", "import-references", "upload-references", "judge", "digest", "enrich-url"])
+    parser.add_argument("command", choices=["feedback", "ingest", "filter", "import-references", "upload-references", "judge", "digest", "enrich-url"])
     parser.add_argument("--config", default="config/searches.json")
     parser.add_argument("--ai-config", default="config/ai.json")
     parser.add_argument("--digest-config", default="config/digest.json")
@@ -29,6 +29,16 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     config = load_searches(args.config)
+    if args.command == "feedback":
+        import os
+        import psycopg
+        from .feedback import ingest
+        if not os.environ.get("DATABASE_URL"):
+            parser.error("feedback requires DATABASE_URL")
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+            count = ingest(conn, bucket=args.bucket)
+        print(f"feedback references added: {count}")
+        return
     if args.command == "enrich-url":
         if not args.url:
             parser.error("enrich-url requires --url")
@@ -143,6 +153,8 @@ def main() -> None:
             if not items:
                 logger.info("%s search %s returned zero items; continuing", source, search["id"])
                 continue
+            for item in items:
+                item.raw_data = {**item.raw_data, "_search_config": effective_search}
             source_total += save(items)
         print(f"{source}: fetched and upserted {source_total} listing records")
         total += source_total
