@@ -13,12 +13,28 @@ def test_remaining_includes_sale_date():
     assert _remaining(end, now) == "18 Days Remaining | Sale on September 16, 2026 at 10:00 AM"
 
 
-def test_render_includes_llm_usage_footer():
+def test_render_includes_llm_cost_footer():
     text, markup = render([], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc), usage={
-        "prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15
+        "prompt_tokens": 12, "completion_tokens": 3, "cache_read_tokens": 5
     })
-    assert "LLM usage: 12 prompt + 3 completion = 15 tokens" in text
-    assert "LLM usage: 12 prompt + 3 completion = 15 tokens" in markup
+    expected = "Estimated LLM cost: $0.000005 (input $0.000001, output $0.000004, cache read $0.000000)"
+    assert expected in text
+    assert expected in markup
+    assert "tokens" not in text
+
+
+def test_render_includes_listing_description_and_new_title():
+    text, markup = render([{
+        "source": "ebay", "external_id": "abc", "title": "Cream trousers",
+        "price": "80.00", "currency": "USD", "price_usd": "80.00",
+        "url": "https://example.test/item", "image_urls": [],
+        "description": "Soft wool\nwith a relaxed cut.", "taste_verdict": "like",
+    }], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc))
+    assert text.startswith("Tastemaker Digest: 1 matches")
+    assert "Description: Soft wool with a relaxed cut." in text
+    assert "<strong>Description</strong><br>Soft wool with a relaxed cut." in markup
+    assert "Tastemaker Digest: 1 matches" in markup
+    assert "background:#ababab" in markup
 
 
 def test_download_images_keeps_content_in_memory(monkeypatch):
@@ -106,7 +122,7 @@ def test_render_marks_filtered_section():
         "title_reason": None, "taste_verdict": "filtered"
     }], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc))
     assert "FILTERED" in markup
-    assert "border:1px solid #b85c52" in markup
+    assert "background:#fce4e4;border:2px solid #b91c1c" in markup
     assert "price exceeds limit" in markup
 
 
@@ -133,6 +149,30 @@ def test_render_places_all_passed_listings_before_filtered_listings():
 
     assert markup.index("Passed ebay listing") < markup.index("Filtered listing")
     assert markup.index("Passed invaluable listing") < markup.index("Filtered listing")
+
+
+def test_render_sorts_listings_by_usd_within_each_source():
+    rows = [
+        {
+            "source": "ebay", "external_id": "expensive", "title": "Expensive",
+            "price": "100.00", "currency": "USD", "price_usd": "100.00",
+            "url": "https://example.test/expensive", "image_urls": [], "taste_verdict": "like",
+        },
+        {
+            "source": "ebay", "external_id": "cheap", "title": "Cheap",
+            "price": "20.00", "currency": "USD", "price_usd": "20.00",
+            "url": "https://example.test/cheap", "image_urls": [], "taste_verdict": "like",
+        },
+        {
+            "source": "invaluable", "external_id": "other", "title": "Other source",
+            "price": "1.00", "currency": "USD", "price_usd": "1.00",
+            "url": "https://example.test/other", "image_urls": [], "taste_verdict": "like",
+        },
+    ]
+
+    _, markup = render(rows, "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc))
+
+    assert markup.index("Cheap") < markup.index("Expensive")
 
 
 def test_empty_digest_is_not_delivered():

@@ -85,6 +85,7 @@ create table if not exists llm_usage (
   prompt_tokens integer not null default 0,
   completion_tokens integer not null default 0,
   total_tokens integer not null default 0,
+  cache_read_tokens integer not null default 0,
   listing_count integer not null default 1,
   recorded_at timestamptz not null default now()
 );
@@ -92,6 +93,7 @@ create table if not exists llm_usage (
 create index if not exists llm_usage_recorded_at_idx on llm_usage (recorded_at desc);
 
 alter table ai_judgments add column if not exists category text;
+alter table llm_usage add column if not exists cache_read_tokens integer not null default 0;
 
 create table if not exists feedback_events (
   event_key text primary key,

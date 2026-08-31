@@ -24,10 +24,10 @@ class OpenAIJudge:
         self.model = model or os.environ.get("OPENAI_MODEL", MODEL)
         configured_budget = max_completion_tokens if max_completion_tokens is not None else os.environ.get("OPENAI_MAX_COMPLETION_TOKENS", 80)
         self.max_completion_tokens = int(configured_budget)
-        self.last_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        self.last_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "cache_read_tokens": 0}
 
     def complete(self, messages: list[dict[str, Any]]) -> Any:
-        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "cache_read_tokens": 0}
         retry_messages = list(messages)
         budgets = [self.max_completion_tokens, max(self.max_completion_tokens * 2, 160), max(self.max_completion_tokens * 4, 320)]
         for attempt, budget in enumerate(budgets):
@@ -46,8 +46,9 @@ class OpenAIJudge:
                 raise RuntimeError(f"OpenAI request failed ({response.status_code}): {response.text[:500]}")
             payload = response.json()
             usage = payload.get("usage") or {}
-            for key in total_usage:
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
                 total_usage[key] += int(usage.get(key, 0))
+            total_usage["cache_read_tokens"] += int((usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0))
             choice = (payload.get("choices") or [{}])[0]
             content = (choice.get("message") or {}).get("content") or ""
             finish_reason = choice.get("finish_reason", "unknown")
@@ -322,7 +323,7 @@ def run_with_config(conn, config: dict, ai_config: dict, source: str | None = No
     logger.info("AI title results: candidates=%d results=%d fast_tracked=%d", len(llm_listings), len(title_results), len(listings) - len(llm_listings))
     if judge and llm_listings:
         usage = judge.last_usage
-        conn.execute("insert into llm_usage (listing_id, operation, model, prompt_tokens, completion_tokens, total_tokens, listing_count) values (%s,'title_gate',%s,%s,%s,%s,%s)", (llm_listings[0]["id"], judge.model, usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"], len(llm_listings)))
+        conn.execute("insert into llm_usage (listing_id, operation, model, prompt_tokens, completion_tokens, total_tokens, cache_read_tokens, listing_count) values (%s,'title_gate',%s,%s,%s,%s,%s,%s)", (llm_listings[0]["id"], judge.model, usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"], usage["cache_read_tokens"], len(llm_listings)))
     processed = 0
     skipped = 0
     classifier_cache = {}

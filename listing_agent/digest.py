@@ -5,6 +5,7 @@ import hashlib
 import os
 import smtplib
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from email.message import EmailMessage
 from urllib.parse import quote
 
@@ -15,6 +16,9 @@ from .config import required_env
 
 MAX_INLINE_ATTACHMENTS = 500
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
+INPUT_COST_PER_MILLION = 0.20
+OUTPUT_COST_PER_MILLION = 1.20
+CACHE_READ_COST_PER_MILLION = 0.02
 
 
 def _feedback_link(address: str, action: str, source: str, external_id: str, title: str) -> str:
@@ -57,68 +61,97 @@ def _category_label(category: str | None) -> str:
     return (category or "Not assigned").replace("_", " ").title()
 
 
+def _description(value: str | None) -> str:
+    return " ".join((value or "").split())
+
+
+def _usd_sort_key(row: dict) -> tuple[int, Decimal]:
+    value = row.get("price_usd")
+    if value is None:
+        return (1, Decimal("0"))
+    try:
+        return (0, Decimal(str(value)))
+    except (InvalidOperation, ValueError):
+        return (1, Decimal("0"))
+
+
+def _usage_cost(usage: dict) -> tuple[float, float, float, float]:
+    cache_read_tokens = usage.get("cache_read_tokens", 0)
+    input_tokens = max(0, usage["prompt_tokens"] - cache_read_tokens)
+    input_cost = input_tokens * INPUT_COST_PER_MILLION / 1_000_000
+    output_cost = usage["completion_tokens"] * OUTPUT_COST_PER_MILLION / 1_000_000
+    cache_read_cost = cache_read_tokens * CACHE_READ_COST_PER_MILLION / 1_000_000
+    return input_cost, output_cost, cache_read_cost, input_cost + output_cost + cache_read_cost
+
+
 def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient: str | None = None, usage: dict | None = None, image_sources: dict[str, str] | None = None) -> tuple[str, str]:
     feedback_recipient = feedback_recipient or recipient
     grouped = {}
     for row in rows:
         grouped.setdefault((row.get("section", "Passed"), row["source"]), []).append(row)
-    subject = f"Daily listing digest: {len(rows)} match{'es' if len(rows) != 1 else ''}"
+    subject = f"Tastemaker Digest: {len(rows)} matches"
     text = [subject, f"Since {start.isoformat()}", ""]
     pretty_start = _pretty_date(start)
-    blocks = [f'''<div style="margin:0;background:#f4f1eb;padding:32px 16px;color:#252321;font-family:Arial,Helvetica,sans-serif;line-height:1.5">
+    blocks = [f'''<div style="margin:0;background:#ababab;padding:32px 16px;color:#1f2326;font-family:Arial,Helvetica,sans-serif;line-height:1.5">
 <div style="max-width:680px;margin:0 auto">
-<p style="margin:0 0 8px;color:#8a8177;font-size:11px;letter-spacing:2px;text-transform:uppercase">Daily selection</p>
+<p style="margin:0 0 8px;color:#3f464a;font-size:11px;letter-spacing:2px;text-transform:uppercase">Tastemaker selection</p>
 <h1 style="margin:0;font-family:Georgia,'Times New Roman',serif;font-size:30px;font-weight:400;letter-spacing:-.5px">{html.escape(subject)}</h1>
-<p style="margin:8px 0 28px;color:#756d65;font-size:13px">Since {html.escape(pretty_start)}</p>''']
+<p style="margin:8px 0 28px;color:#3f464a;font-size:13px">Since {html.escape(pretty_start)}</p>''']
     for (section, source), items in sorted(grouped.items(), key=lambda item: (item[0][0] != "Passed", item[0][1])):
         text.extend([section.upper(), source.title(), "=" * len(source)])
         section_color = "#756d65" if section == "Passed" else "#9b5148"
         blocks.append(f'<h2 style="margin:28px 0 12px;padding-bottom:8px;border-bottom:1px solid #d8d1c7;font-size:12px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:{section_color}">{html.escape(section.upper())} · {html.escape(source.title())}</h2>')
-        for row in items:
+        for row in sorted(items, key=_usd_sort_key):
             reason = row.get("filter_reason") or row.get("taste_reason") or row.get("title_reason") or "Matched configured search"
             like = _feedback_link(feedback_recipient, "like", row["source"], row["external_id"], row["title"])
             dislike = _feedback_link(feedback_recipient, "dislike", row["source"], row["external_id"], row["title"])
             remaining = _remaining(row.get("sale_end_at"))
             category = _category_label(row.get("category"))
             classifier = f"{category} preference classifier" if row.get("category") else "None"
+            description = _description(row.get("description"))
             text.extend([row["title"], _price(row["price"], row["currency"], row["price_usd"]), row["url"]])
             if remaining:
                 text.append(remaining)
             text.extend([f"Category: {category}", f"Classifier used: {classifier}", f"Verdict: {row['taste_verdict']}. {reason}", f"Like: {like}", f"Dislike: {dislike}", ""])
+            if description:
+                text.insert(-1, f"Description: {description}")
             image = row["image_urls"][0] if row["image_urls"] else ""
             image_source = (image_sources or {}).get(row["external_id"], image)
             image_html = f'<img src="{html.escape(image_source, quote=True)}" alt="Listing image" width="320" style="display:block;width:100%;max-width:320px;height:auto;max-height:240px;object-fit:contain"><br>' if image_source else ""
             filtered = section == "Filtered"
-            card_border = "#b85c52" if filtered else "#ddd6cc"
-            filtered_label = '<p style="margin:0 0 10px;color:#a14d45;font-size:10px;font-weight:700;letter-spacing:1.5px">FILTERED</p>' if filtered else ""
-            blocks.append(f'''<div style="margin:0 0 16px;padding:18px;background:#fffefa;border:1px solid {card_border};border-radius:8px;box-shadow:0 2px 8px rgba(50,40,30,.04)">
+            card_background = "#fce4e4" if filtered else "#fffefa"
+            card_border = "#b91c1c" if filtered else "#ddd6cc"
+            filtered_label = '<p style="margin:0 0 10px;color:#991b1b;font-size:10px;font-weight:700;letter-spacing:1.5px">FILTERED</p>' if filtered else ""
+            description_html = f'<p style="margin:0 0 10px;font-size:13px;color:#3f464a"><strong>Description</strong><br>{html.escape(description)}</p>' if description else ""
+            blocks.append(f'''<div style="margin:0 0 16px;padding:18px;background:{card_background};border:2px solid {card_border};border-radius:8px;box-shadow:0 2px 8px rgba(30,30,30,.08)">
  {image_html}{filtered_label}<h3 style="margin:12px 0 6px;font-family:Georgia,'Times New Roman',serif;font-size:20px;font-weight:400;line-height:1.25"><a style="color:#252321;text-decoration:none" href="{html.escape(row['url'], quote=True)}">{html.escape(row['title'])}</a></h3>
  <p style="margin:0 0 4px;font-size:13px;color:#514b45">{html.escape(_price(row['price'], row['currency'], row['price_usd']))}</p>
  {f'<p style="margin:0 0 10px;font-size:12px;color:#8a8177;letter-spacing:.2px">{html.escape(remaining)}</p>' if remaining else ''}
- <p style="margin:0 0 10px;font-size:12px;color:#756d65">Category: <strong>{html.escape(category)}</strong><br>Classifier used: <strong>{html.escape(classifier)}</strong></p>
- <p style="margin:0 0 16px;font-size:14px;color:#514b45">{html.escape(reason)}</p>
+ <p style="margin:0 0 10px;font-size:12px;color:#3f464a">Category: <strong>{html.escape(category)}</strong><br>Classifier used: <strong>{html.escape(classifier)}</strong></p>
+ {description_html}<p style="margin:0 0 16px;font-size:14px;color:#30363a">{html.escape(reason)}</p>
 <p style="margin:0;font-size:13px"><a style="display:inline-block;padding:7px 12px;border:1px solid #b9aa98;border-radius:4px;color:#514b45;text-decoration:none" href="{html.escape(like, quote=True)}">Like</a>&nbsp;&nbsp;<a style="display:inline-block;padding:7px 12px;border:1px solid #b9aa98;border-radius:4px;color:#514b45;text-decoration:none" href="{html.escape(dislike, quote=True)}">Dislike</a></p>
 </div>''')
     if not rows:
         text.append("No matching listings.")
         blocks.append("<p style=\"padding:18px;background:#fffefa;border:1px solid #ddd6cc;border-radius:8px\">No matching listings.</p>")
-    usage = usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    usage_line = f"LLM usage: {usage['prompt_tokens']} prompt + {usage['completion_tokens']} completion = {usage['total_tokens']} tokens"
-    text.extend(["", usage_line])
-    blocks.append(f'<p style="margin:28px 0 0;padding-top:12px;border-top:1px solid #d8d1c7;color:#8a8177;font-size:11px">{html.escape(usage_line)}</p>')
+    usage = usage or {"prompt_tokens": 0, "completion_tokens": 0, "cache_read_tokens": 0}
+    input_cost, output_cost, cache_read_cost, total_cost = _usage_cost(usage)
+    cost_line = f"Estimated LLM cost: ${total_cost:.6f} (input ${input_cost:.6f}, output ${output_cost:.6f}, cache read ${cache_read_cost:.6f})"
+    text.extend(["", cost_line])
+    blocks.append(f'<p style="margin:28px 0 0;padding-top:12px;border-top:1px solid #d8d1c7;color:#8a8177;font-size:11px">{html.escape(cost_line)}</p>')
     blocks.append("</div></div>")
     return "\n".join(text), "".join(blocks)
 
 
 def fetch_rows(conn, start: datetime, include_filtered: bool = False) -> list[dict]:
     rows = conn.execute("""select l.source, l.external_id, l.title, l.price, l.currency, l.price_usd,
-        l.url, l.image_urls, l.sale_end_at, l.filter_status, l.filter_reason,
+        l.description, l.url, l.image_urls, l.sale_end_at, l.filter_status, l.filter_reason,
         j.title_reason, j.title_pass, j.category, j.taste_verdict, j.taste_reason
         from listings l left join ai_judgments j on j.listing_id = l.id
         where l.fetched_at >= %s and ((l.filter_status = 'passed' and j.title_pass = true and j.taste_verdict in ('like', 'uncertain'))
           or (%s and l.filter_status = 'filtered'))
         order by case when l.filter_status = 'passed' then 0 else 1 end, l.source, l.fetched_at desc""", (start, include_filtered)).fetchall()
-    keys = ("source", "external_id", "title", "price", "currency", "price_usd", "url", "image_urls", "sale_end_at", "filter_status", "filter_reason", "title_reason", "title_pass", "category", "taste_verdict", "taste_reason")
+    keys = ("source", "external_id", "title", "price", "currency", "price_usd", "description", "url", "image_urls", "sale_end_at", "filter_status", "filter_reason", "title_reason", "title_pass", "category", "taste_verdict", "taste_reason")
     output = [dict(zip(keys, row)) for row in rows]
     for row in output:
         row["section"] = "Passed" if row["filter_status"] == "passed" else "Filtered"
@@ -128,8 +161,8 @@ def fetch_rows(conn, start: datetime, include_filtered: bool = False) -> list[di
 
 
 def fetch_usage(conn, start: datetime) -> dict:
-    row = conn.execute("select coalesce(sum(prompt_tokens), 0), coalesce(sum(completion_tokens), 0), coalesce(sum(total_tokens), 0) from llm_usage where recorded_at >= %s", (start,)).fetchone()
-    return {"prompt_tokens": row[0], "completion_tokens": row[1], "total_tokens": row[2]}
+    row = conn.execute("select coalesce(sum(prompt_tokens), 0), coalesce(sum(completion_tokens), 0), coalesce(sum(total_tokens), 0), coalesce(sum(cache_read_tokens), 0) from llm_usage where recorded_at >= %s", (start,)).fetchone()
+    return {"prompt_tokens": row[0], "completion_tokens": row[1], "total_tokens": row[2], "cache_read_tokens": row[3]}
 
 
 def download_images(rows: list[dict]) -> tuple[dict[str, str], list[tuple[str, bytes, str, str]]]:
@@ -190,7 +223,7 @@ def deliver(conn, start: datetime, recipient: str, dry_run: bool = False, includ
     image_sources, attachments = download_images(rows) if not dry_run else ({}, [])
     text, markup = render(rows, recipient, start, feedback_recipient, fetch_usage(conn, start), image_sources)
     message = EmailMessage()
-    message["Subject"] = f"Daily listing digest: {len(rows)} match{'es' if len(rows) != 1 else ''}"
+    message["Subject"] = f"Tastemaker Digest: {len(rows)} matches"
     message["From"] = os.environ.get("DIGEST_FROM") or os.environ.get("SMTP_USERNAME") or os.environ.get("IMAP_USERNAME", "listing-agent@localhost")
     message["To"] = recipient
     message.set_content(text)

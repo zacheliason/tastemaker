@@ -82,7 +82,7 @@ def test_openai_client_retries_empty_json(monkeypatch):
     monkeypatch.setattr("listing_agent.ai.httpx.post", lambda *args, **kwargs: next(responses))
     judge = OpenAIJudge(api_key="test")
     assert judge.complete([{"role": "user", "content": "JSON"}]) == {"ok": True}
-    assert judge.last_usage == {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}
+    assert judge.last_usage == {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6, "cache_read_tokens": 0}
 
 
 def test_openai_client_retries_length_truncation_with_larger_budget(monkeypatch):
