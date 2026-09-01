@@ -102,7 +102,7 @@ def _usage_cost(usage: dict) -> tuple[float, float, float, float]:
     return input_cost, output_cost, cache_read_cost, input_cost + output_cost + cache_read_cost
 
 
-def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient: str | None = None, usage: dict | None = None, image_sources: dict[str, str] | None = None) -> tuple[str, str]:
+def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient: str | None = None, usage: dict | None = None, image_sources: dict[str, str] | None = None, translation_usage: dict | None = None) -> tuple[str, str]:
     feedback_recipient = feedback_recipient or recipient
     grouped = {}
     for row in rows:
@@ -186,6 +186,11 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
     cost_line = f"Estimated LLM cost: ${total_cost:.6f} (input ${input_cost:.6f}, output ${output_cost:.6f}, cache read ${cache_read_cost:.6f})"
     text.extend(["", cost_line])
     blocks.append(f'<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#182b2b"><tr><td style="padding:18px 28px;color:#b9c7c0;font-size:11px">{html.escape(cost_line)}</td></tr></table>')
+    translation_chars = (translation_usage or {}).get("characters", 0)
+    if translation_chars:
+        translation_line = f"Google Translation usage: {translation_chars:,} source characters this run"
+        text.append(translation_line)
+        blocks.append(f'<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#182b2b"><tr><td style="padding:0 28px 18px;color:#b9c7c0;font-size:11px">{html.escape(translation_line)}</td></tr></table>')
     blocks.append("</div></div>")
     return "\n".join(text), "".join(blocks)
 
@@ -268,8 +273,9 @@ def deliver(conn, start: datetime, recipient: str, dry_run: bool = False, includ
         return 0
     feedback_recipient = os.environ.get("IMAP_USERNAME") or recipient
     image_sources, attachments = download_images(rows) if not dry_run else ({}, [])
-    translate_rows(conn, rows)
-    text, markup = render(rows, recipient, start, feedback_recipient, fetch_usage(conn, start), image_sources)
+    translation_usage = {}
+    translate_rows(conn, rows, translation_usage)
+    text, markup = render(rows, recipient, start, feedback_recipient, fetch_usage(conn, start), image_sources, translation_usage)
     message = EmailMessage()
     message["Subject"] = f"Tastemaker Digest: {len(rows)} matches"
     message["From"] = os.environ.get("DIGEST_FROM") or os.environ.get("SMTP_USERNAME") or os.environ.get("IMAP_USERNAME", "listing-agent@localhost")

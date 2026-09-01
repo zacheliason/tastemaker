@@ -70,8 +70,10 @@ def _translate_batch(texts: list[str]) -> list[tuple[str, str]]:
     ]
 
 
-def translate_rows(conn, rows: list[dict]) -> int:
+def translate_rows(conn, rows: list[dict], usage: dict | None = None) -> int:
     """Translate displayed descriptions while enforcing the monthly free allowance."""
+    usage = usage if usage is not None else {}
+    usage["characters"] = 0
     candidates = []
     for row in rows:
         if row.get("section", "Passed") != "Passed":
@@ -109,6 +111,11 @@ def translate_rows(conn, rows: list[dict]) -> int:
         batch = batch[:allowed]
         if not batch:
             break
+        # Reserve before the request so a failed/interrupted request cannot cause
+        # a later run to exceed the hard monthly limit.
+        _record_monthly_usage(conn, month_start, used)
+        usage["characters"] += used
+        remaining -= used
         try:
             translated = _translate_batch([item[1] for item in batch])
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
@@ -126,8 +133,6 @@ def translate_rows(conn, rows: list[dict]) -> int:
                 "set source_language = excluded.source_language, translated_text = excluded.translated_text, translated_at = now()",
                 (content_hash, source_language, translated_text),
             )
-        _record_monthly_usage(conn, month_start, used)
-        remaining -= used
         if not remaining:
             logger.warning("Google Translation monthly character limit reached; translation disabled")
             break

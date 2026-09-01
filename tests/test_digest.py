@@ -67,10 +67,18 @@ def test_translate_rows_batches_and_labels_cached_result(monkeypatch):
     monkeypatch.setattr("listing_agent.translation.httpx.post", lambda *args, **kwargs: Response())
     rows = [{"section": "Passed", "description": "Ein schoener Stuhl"}]
     conn = Connection()
+    usage = {}
 
-    assert translate_rows(conn, rows) == 1
+    assert translate_rows(conn, rows, usage) == 1
     assert rows[0]["description"] == "(TRANSLATED FROM DE: A beautiful chair)"
     assert len(conn.inserts) == 1
+    assert usage == {"characters": len("Ein schoener Stuhl")}
+
+
+def test_render_reports_translation_usage():
+    text, markup = render([], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc), translation_usage={"characters": 1234})
+    assert "Google Translation usage: 1,234 source characters this run" in text
+    assert "Google Translation usage: 1,234 source characters this run" in markup
 
 
 def test_render_preserves_safe_description_html_without_allowing_scripts():

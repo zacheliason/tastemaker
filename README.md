@@ -85,7 +85,7 @@ SMTP_PORT=587
 
 Never put secret values in workflow YAML or committed configuration files.
 
-Non-English descriptions are detected before the digest is rendered and translated in batches through Google Cloud Translation Basic. Results are cached in `description_translations` by a hash of the original description, so unchanged descriptions do not consume another request. Usage is tracked in `translation_usage_monthly` and hard-capped at 500,000 source characters per calendar month. Once the cap is reached, no more translation API requests are made. Translated entries are labeled `TRANSLATED FROM XX`. If the API key is unavailable or a batch fails, the original description is retained.
+Non-English descriptions are detected before the digest is rendered and translated in batches through Google Cloud Translation Basic. Results are cached in `description_translations` by a hash of the original description, so unchanged descriptions do not consume another request. Usage is tracked in `translation_usage_monthly` and hard-capped at 500,000 source characters per calendar month. Once the cap is reached, no more translation API requests are made. When translation requests are made, the digest footer reports the source characters submitted during that run. Translated entries are labeled `TRANSLATED FROM XX`. If the API key is unavailable or a batch fails, the original description is retained.
 
 ### 3. Apply repository configuration
 
