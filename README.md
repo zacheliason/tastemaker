@@ -41,6 +41,7 @@ Create or obtain:
 - eBay developer application credentials
 - A FreeCurrencyAPI key
 - An authorized ZenRows API key for remote Invaluable enrichment
+- A Google Cloud Translation API key for translating non-English digest descriptions (optional)
 
 ### 2. Add GitHub Actions secrets
 
@@ -49,6 +50,7 @@ In the repository, open **Settings → Secrets and variables → Actions → New
 ```text
 DATABASE_URL
 OPENAI_API_KEY
+GOOGLE_TRANSLATE_API_KEY
 SUPABASE_URL
 SUPABASE_SERVICE_ROLE_KEY
 ZENROWS_API_KEY
@@ -82,6 +84,8 @@ SMTP_PORT=587
 `IMAP_PASSWORD` and `SMTP_PASSWORD` may use the same Google App Password. `IMAP_USERNAME` receives Like/Dislike feedback replies. `DIGEST_TO` receives the digest.
 
 Never put secret values in workflow YAML or committed configuration files.
+
+Non-English descriptions are detected before the digest is rendered and translated in batches through Google Cloud Translation Basic. Results are cached in `description_translations` by a hash of the original description, so unchanged descriptions do not consume another request. Usage is tracked in `translation_usage_monthly` and hard-capped at 500,000 source characters per calendar month. Once the cap is reached, no more translation API requests are made. Translated entries are labeled `TRANSLATED FROM XX`. If the API key is unavailable or a batch fails, the original description is retained.
 
 ### 3. Apply repository configuration
 

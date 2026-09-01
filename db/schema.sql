@@ -77,6 +77,20 @@ create table if not exists digest_runs (
   primary key (digest_date, recipient)
 );
 
+create table if not exists description_translations (
+  content_sha256 text not null,
+  source_language text not null,
+  target_language text not null,
+  translated_text text not null,
+  translated_at timestamptz not null default now(),
+  primary key (content_sha256, target_language)
+);
+
+create table if not exists translation_usage_monthly (
+  month_start date primary key,
+  chars_translated integer not null default 0 check (chars_translated >= 0)
+);
+
 create table if not exists llm_usage (
   id bigserial primary key,
   listing_id bigint references listings(id) on delete set null,

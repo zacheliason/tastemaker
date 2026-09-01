@@ -16,6 +16,8 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
       OPENAI_MAX_COMPLETION_TOKENS: "2048"
+      GOOGLE_TRANSLATE_API_KEY: ${{ secrets.GOOGLE_TRANSLATE_API_KEY }}
+      GOOGLE_TRANSLATE_URL: https://translation.googleapis.com/language/translate/v2
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       ZENROWS_API_KEY: ${{ secrets.ZENROWS_API_KEY }}

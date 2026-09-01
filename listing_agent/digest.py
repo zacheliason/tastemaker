@@ -10,8 +10,10 @@ from email.message import EmailMessage
 from urllib.parse import quote
 
 import httpx
+from bs4 import BeautifulSoup, Comment
 
 from .config import required_env
+from .translation import translate_rows
 
 
 MAX_INLINE_ATTACHMENTS = 500
@@ -65,6 +67,22 @@ def _description(value: str | None) -> str:
     return " ".join((value or "").split())
 
 
+def _description_html(value: str | None) -> str:
+    """Keep useful description markup while removing executable HTML."""
+    soup = BeautifulSoup(value or "", "html.parser")
+    allowed = {"b", "strong", "i", "em", "u", "br", "p", "ul", "ol", "li"}
+    for node in soup.find_all(string=lambda text: isinstance(text, Comment)):
+        node.extract()
+    for tag in soup.find_all(True):
+        if tag.name in {"script", "style", "iframe", "object", "embed", "form"}:
+            tag.decompose()
+        elif tag.name not in allowed:
+            tag.unwrap()
+        else:
+            tag.attrs = {}
+    return " ".join(soup.decode_contents().split())
+
+
 def _usd_sort_key(row: dict) -> tuple[int, Decimal]:
     value = row.get("price_usd")
     if value is None:
@@ -90,25 +108,52 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
     for row in rows:
         grouped.setdefault((row.get("section", "Passed"), row["source"]), []).append(row)
     subject = f"Tastemaker Digest: {len(rows)} matches"
+    passed_count = sum(row.get("section", "Passed") == "Passed" for row in rows)
+    filtered_count = len(rows) - passed_count
+    source_count = len({row["source"] for row in rows})
     text = [subject, f"Since {start.isoformat()}", ""]
     pretty_start = _pretty_date(start)
-    blocks = [f'''<div style="margin:0;background:#ababab;padding:32px 16px;color:#1f2326;font-family:Arial,Helvetica,sans-serif;line-height:1.5">
-<div style="max-width:680px;margin:0 auto">
-<p style="margin:0 0 8px;color:#3f464a;font-size:11px;letter-spacing:2px;text-transform:uppercase">Tastemaker selection</p>
-<h1 style="margin:0;font-family:Georgia,'Times New Roman',serif;font-size:30px;font-weight:400;letter-spacing:-.5px">{html.escape(subject)}</h1>
-<p style="margin:8px 0 28px;color:#3f464a;font-size:13px">Since {html.escape(pretty_start)}</p>''']
+    summary = f"{passed_count} selected · {source_count} source{'s' if source_count != 1 else ''}"
+    if filtered_count:
+        summary += f" · {filtered_count} filtered"
+    text.insert(2, summary)
+    blocks = [f'''<div style="margin:0;background:#edf4f8;padding:20px 12px 36px;color:#182b2b;font-family:'Trebuchet MS',Verdana,sans-serif;line-height:1.5">
+<style>
+  @media only screen and (max-width:600px) {{
+    .digest-wrap {{ width:100% !important; }}
+    .listing-media, .listing-copy {{ display:block !important; width:100% !important; box-sizing:border-box !important; }}
+    .listing-media {{ padding:0 !important; }}
+    .listing-media img {{ max-width:100% !important; max-height:none !important; }}
+    .listing-copy {{ padding:18px !important; }}
+    .digest-title {{ font-size:30px !important; }}
+  }}
+</style>
+<div class="digest-wrap" style="max-width:720px;margin:0 auto">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#182b2b">
+  <tr><td style="padding:28px 28px 24px;border-bottom:4px solid #d7ed62">
+    <p style="margin:0 0 18px;color:#d7ed62;font-size:10px;font-weight:700;letter-spacing:2.4px;text-transform:uppercase">Tastemaker / Daily edit</p>
+    <h1 class="digest-title" style="margin:0;color:#f7f5ee;font-family:Georgia,'Times New Roman',serif;font-size:36px;line-height:1.05;font-weight:400;letter-spacing:-.7px">{html.escape(subject)}</h1>
+    <p style="margin:14px 0 0;color:#b9c7c0;font-size:12px;letter-spacing:.2px">A considered edit from {html.escape(pretty_start)}</p>
+  </td></tr>
+</table>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#f7f5ee;border-left:1px solid #dce6e1;border-right:1px solid #dce6e1">
+  <tr><td style="padding:15px 28px;border-bottom:1px solid #dce6e1;color:#55706b;font-size:11px;font-weight:700;letter-spacing:1.3px;text-transform:uppercase">{html.escape(summary)}</td></tr>
+</table>''']
     for (section, source), items in sorted(grouped.items(), key=lambda item: (item[0][0] != "Passed", item[0][1])):
         text.extend([section.upper(), source.title(), "=" * len(source)])
-        section_color = "#756d65" if section == "Passed" else "#9b5148"
-        blocks.append(f'<h2 style="margin:28px 0 12px;padding-bottom:8px;border-bottom:1px solid #d8d1c7;font-size:12px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:{section_color}">{html.escape(section.upper())} · {html.escape(source.title())}</h2>')
+        section_color = "#557c1d" if section == "Passed" else "#a6534c"
+        section_note = "Selected for your edit" if section == "Passed" else "Set aside by the configured filters"
+        blocks.append(f'''<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#f7f5ee;border-left:1px solid #dce6e1;border-right:1px solid #dce6e1">
+<tr><td style="padding:28px 28px 12px"><h2 style="margin:0 0 3px;color:{section_color};font-size:11px;font-weight:700;letter-spacing:1.8px;text-transform:uppercase">{html.escape(section)}</h2><p style="margin:0;color:#7b8984;font-size:12px">{html.escape(source.title())} <span style="color:#b2beb9">/</span> {html.escape(section_note)}</p></td></tr></table>''')
         for row in sorted(items, key=_usd_sort_key):
+            filtered = section == "Filtered"
             reason = row.get("filter_reason") or row.get("taste_reason") or row.get("title_reason") or "Matched configured search"
             like = _feedback_link(feedback_recipient, "like", row["source"], row["external_id"], row["title"])
             dislike = _feedback_link(feedback_recipient, "dislike", row["source"], row["external_id"], row["title"])
             remaining = _remaining(row.get("sale_end_at"))
             category = _category_label(row.get("category"))
             classifier = f"{category} preference classifier" if row.get("category") else "None"
-            description = _description(row.get("description"))
+            description = "" if filtered else _description(row.get("description"))
             text.extend([row["title"], _price(row["price"], row["currency"], row["price_usd"]), row["url"]])
             if remaining:
                 text.append(remaining)
@@ -117,28 +162,30 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
                 text.insert(-1, f"Description: {description}")
             image = row["image_urls"][0] if row["image_urls"] else ""
             image_source = (image_sources or {}).get(row["external_id"], image)
-            image_html = f'<img src="{html.escape(image_source, quote=True)}" alt="Listing image" width="320" style="display:block;width:100%;max-width:320px;height:auto;max-height:240px;object-fit:contain"><br>' if image_source else ""
-            filtered = section == "Filtered"
-            card_background = "#fce4e4" if filtered else "#fffefa"
-            card_border = "#b91c1c" if filtered else "#ddd6cc"
-            filtered_label = '<p style="margin:0 0 10px;color:#991b1b;font-size:10px;font-weight:700;letter-spacing:1.5px">FILTERED</p>' if filtered else ""
-            description_html = f'<p style="margin:0 0 10px;font-size:13px;color:#3f464a"><strong>Description</strong><br>{html.escape(description)}</p>' if description else ""
-            blocks.append(f'''<div style="margin:0 0 16px;padding:18px;background:{card_background};border:2px solid {card_border};border-radius:8px;box-shadow:0 2px 8px rgba(30,30,30,.08)">
- {image_html}{filtered_label}<h3 style="margin:12px 0 6px;font-family:Georgia,'Times New Roman',serif;font-size:20px;font-weight:400;line-height:1.25"><a style="color:#252321;text-decoration:none" href="{html.escape(row['url'], quote=True)}">{html.escape(row['title'])}</a></h3>
- <p style="margin:0 0 4px;font-size:13px;color:#514b45">{html.escape(_price(row['price'], row['currency'], row['price_usd']))}</p>
- {f'<p style="margin:0 0 10px;font-size:12px;color:#8a8177;letter-spacing:.2px">{html.escape(remaining)}</p>' if remaining else ''}
- <p style="margin:0 0 10px;font-size:12px;color:#3f464a">Category: <strong>{html.escape(category)}</strong><br>Classifier used: <strong>{html.escape(classifier)}</strong></p>
- {description_html}<p style="margin:0 0 16px;font-size:14px;color:#30363a">{html.escape(reason)}</p>
-<p style="margin:0;font-size:13px"><a style="display:inline-block;padding:7px 12px;border:1px solid #b9aa98;border-radius:4px;color:#514b45;text-decoration:none" href="{html.escape(like, quote=True)}">Like</a>&nbsp;&nbsp;<a style="display:inline-block;padding:7px 12px;border:1px solid #b9aa98;border-radius:4px;color:#514b45;text-decoration:none" href="{html.escape(dislike, quote=True)}">Dislike</a></p>
-</div>''')
+            image_html = f'<img src="{html.escape(image_source, quote=True)}" alt="Listing image" width="270" style="display:block;width:100%;max-width:270px;height:auto;max-height:250px;object-fit:cover">' if image_source else '<div style="height:110px;background:#e8eeea;color:#8ca09a;font-size:10px;letter-spacing:1.2px;text-align:center;text-transform:uppercase;line-height:110px">No image supplied</div>'
+            card_background = "#ffffff"
+            card_border = "#c77983" if filtered else "#cbdbe5"
+            filtered_label = '<p style="margin:0 0 10px;color:#a14d58;font-size:10px;font-weight:700;letter-spacing:1.5px">FILTERED</p>' if filtered else ""
+            description_markup = "" if filtered else _description_html(row.get("description"))
+            description_html = f'<p style="margin:0 0 12px;font-size:13px;line-height:1.45;color:#55706b"><strong>Description</strong><br>{description_markup}</p>' if description_markup else ""
+            blocks.append(f'''<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#f7f5ee;border-left:1px solid #dce6e1;border-right:1px solid #dce6e1">
+<tr><td style="padding:8px 28px 20px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:{card_background};border:1px solid {card_border}">
+<tr><td class="listing-media" width="39%" valign="top" style="padding:0;background:#e8eeea">{image_html}</td><td class="listing-copy" width="61%" valign="top" style="padding:20px 22px 18px">
+  {filtered_label}<h3 style="margin:0 0 9px;font-family:Georgia,'Times New Roman',serif;font-size:22px;line-height:1.13;font-weight:400;letter-spacing:-.25px"><a style="color:#182b2b;text-decoration:none" href="{html.escape(row['url'], quote=True)}">{html.escape(row['title'])}</a></h3>
+  <p style="margin:0 0 4px;color:#557c1d;font-size:16px;font-weight:700">{html.escape(_price(row['price'], row['currency'], row['price_usd']))}</p>
+  {f'<p style="margin:0 0 13px;color:#7b8984;font-size:11px">{html.escape(remaining)}</p>' if remaining else '<div style="height:13px"></div>'}
+  <p style="margin:0 0 13px;color:#71807a;font-size:11px;line-height:1.5">Category: <strong>{html.escape(category)}</strong><br>Classifier used: <strong>{html.escape(classifier)}</strong></p>
+  {description_html}<p style="margin:0 0 16px;color:#294442;font-size:13px;line-height:1.45">{html.escape(reason)}</p>
+  <p style="margin:0;font-size:12px"><a style="display:inline-block;padding:8px 13px;background:#d7ed62;color:#182b2b;font-weight:700;text-decoration:none" href="{html.escape(like, quote=True)}">Like</a>&nbsp;&nbsp;<a style="display:inline-block;padding:7px 12px;border:1px solid #a9b9b2;color:#55706b;text-decoration:none" href="{html.escape(dislike, quote=True)}">Dislike</a></p>
+</td></tr></table></td></tr></table>''')
     if not rows:
         text.append("No matching listings.")
-        blocks.append("<p style=\"padding:18px;background:#fffefa;border:1px solid #ddd6cc;border-radius:8px\">No matching listings.</p>")
+        blocks.append('<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#f7f5ee;border:1px solid #dce6e1"><tr><td style="padding:42px 28px 50px;color:#55706b;font-family:Georgia,serif;font-size:22px">No matching listings.</td></tr></table>')
     usage = usage or {"prompt_tokens": 0, "completion_tokens": 0, "cache_read_tokens": 0}
     input_cost, output_cost, cache_read_cost, total_cost = _usage_cost(usage)
     cost_line = f"Estimated LLM cost: ${total_cost:.6f} (input ${input_cost:.6f}, output ${output_cost:.6f}, cache read ${cache_read_cost:.6f})"
     text.extend(["", cost_line])
-    blocks.append(f'<p style="margin:28px 0 0;padding-top:12px;border-top:1px solid #d8d1c7;color:#8a8177;font-size:11px">{html.escape(cost_line)}</p>')
+    blocks.append(f'<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#182b2b"><tr><td style="padding:18px 28px;color:#b9c7c0;font-size:11px">{html.escape(cost_line)}</td></tr></table>')
     blocks.append("</div></div>")
     return "\n".join(text), "".join(blocks)
 
@@ -221,6 +268,7 @@ def deliver(conn, start: datetime, recipient: str, dry_run: bool = False, includ
         return 0
     feedback_recipient = os.environ.get("IMAP_USERNAME") or recipient
     image_sources, attachments = download_images(rows) if not dry_run else ({}, [])
+    translate_rows(conn, rows)
     text, markup = render(rows, recipient, start, feedback_recipient, fetch_usage(conn, start), image_sources)
     message = EmailMessage()
     message["Subject"] = f"Tastemaker Digest: {len(rows)} matches"

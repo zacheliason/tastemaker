@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from listing_agent.digest import _price, _remaining, deliver, render
+from listing_agent.translation import translate_rows
 
 
 def test_price_only_shows_usd():
@@ -34,7 +35,56 @@ def test_render_includes_listing_description_and_new_title():
     assert "Description: Soft wool with a relaxed cut." in text
     assert "<strong>Description</strong><br>Soft wool with a relaxed cut." in markup
     assert "Tastemaker Digest: 1 matches" in markup
-    assert "background:#ababab" in markup
+    assert "background:#edf4f8" in markup
+    assert "background:#ababab" not in markup
+
+
+def test_translate_rows_batches_and_labels_cached_result(monkeypatch):
+    class Result:
+        def fetchall(self):
+            return []
+
+        def fetchone(self):
+            return (0,)
+
+    class Connection:
+        def __init__(self):
+            self.inserts = []
+
+        def execute(self, query, params):
+            if query.startswith("insert into description_translations"):
+                self.inserts.append(params)
+            return Result()
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": {"translations": [{"detectedSourceLanguage": "de", "translatedText": "A beautiful chair"}]}}
+
+    monkeypatch.setenv("GOOGLE_TRANSLATE_API_KEY", "test-key")
+    monkeypatch.setattr("listing_agent.translation.httpx.post", lambda *args, **kwargs: Response())
+    rows = [{"section": "Passed", "description": "Ein schoener Stuhl"}]
+    conn = Connection()
+
+    assert translate_rows(conn, rows) == 1
+    assert rows[0]["description"] == "(TRANSLATED FROM DE: A beautiful chair)"
+    assert len(conn.inserts) == 1
+
+
+def test_render_preserves_safe_description_html_without_allowing_scripts():
+    _, markup = render([{
+        "source": "invaluable", "external_id": "html-1", "title": "Pecos Valley",
+        "price": "20.00", "currency": "USD", "price_usd": "20.00",
+        "url": "https://example.test/item", "image_urls": [],
+        "description": "<b>Gustave Baumann</b><br>German American<script>alert('x')</script>",
+        "taste_verdict": "like",
+    }], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc))
+
+    assert "<strong>Description</strong><br><b>Gustave Baumann</b><br/>German American" in markup
+    assert "&lt;b&gt;Gustave Baumann&lt;/b&gt;" not in markup
+    assert "<script" not in markup
 
 
 def test_download_images_keeps_content_in_memory(monkeypatch):
@@ -118,12 +168,22 @@ def test_render_marks_filtered_section():
     _, markup = render([{
         "section": "Filtered", "source": "invaluable", "external_id": "filtered-1", "title": "Expensive lot",
         "price": "1000.00", "currency": "USD", "price_usd": "1000.00", "url": "https://example.test/item",
-        "image_urls": [], "filter_reason": "price exceeds limit", "taste_reason": None,
+        "image_urls": [], "description": "Private seller notes", "filter_reason": "price exceeds limit", "taste_reason": None,
         "title_reason": None, "taste_verdict": "filtered"
     }], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc))
     assert "FILTERED" in markup
-    assert "background:#fce4e4;border:2px solid #b91c1c" in markup
+    assert "background:#ffffff;border:1px solid #c77983" in markup
     assert "price exceeds limit" in markup
+    assert "Private seller notes" not in markup
+
+    text, _ = render([{
+        "section": "Filtered", "source": "invaluable", "external_id": "filtered-1", "title": "Expensive lot",
+        "price": "1000.00", "currency": "USD", "price_usd": "1000.00", "url": "https://example.test/item",
+        "image_urls": [], "description": "Private seller notes", "filter_reason": "price exceeds limit",
+        "taste_verdict": "filtered"
+    }], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc))
+    assert "Private seller notes" not in text
+    assert "Description:" not in text
 
 
 def test_render_places_all_passed_listings_before_filtered_listings():
