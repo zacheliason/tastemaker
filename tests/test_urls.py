@@ -16,6 +16,11 @@ def test_allowed_size_fields_rejects_out_of_range_structured_sizes():
     )
     assert evaluate({"title": "trousers", "size_fields": {"waist": 30}}, search) == ("passed", None)
     assert evaluate({"title": "shoes", "size_fields": {"shoe_size": 8.5}}, search) == ("passed", None)
+    assert evaluate({"title": "shoes", "size_fields": {"shoe_size": 9.5, "shoe_size_gender": "women"}}, search) == ("passed", None)
+    assert evaluate({"title": "women's shoe size 10", "size_fields": {}}, search) == ("passed", None)
+    assert evaluate({"title": "women's shoe size 11", "size_fields": {}}, search) == (
+        "filtered", "title size not allowed: shoe_size=11"
+    )
     assert evaluate({"title": "Polo trousers Mens 38x26", "size_fields": {}}, search) == (
         "filtered", "title size not allowed: waist=38"
     )

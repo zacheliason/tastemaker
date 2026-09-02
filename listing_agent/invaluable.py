@@ -16,6 +16,7 @@ from email.utils import parseaddr
 from bs4 import BeautifulSoup
 
 from .config import required_env
+from .filters import content_exclusion
 from .models import Listing
 from .pricing import parse_price, to_usd
 from .urls import strip_queries, strip_query, url_key
@@ -144,6 +145,9 @@ def parse_message(message: Message, search: dict) -> list[Listing]:
             continue
         seen_urls.add(href)
         block = container.get_text(" ", strip=True)
+        excluded = content_exclusion({"title": title, "description": block}, search)
+        if excluded:
+            continue
         price, currency = _price(block)
         haystack = f"{title} {block}".lower()
         if search.get("include_keywords") and not any(
@@ -308,6 +312,10 @@ def fetch(search: dict) -> list[Listing]:
                 enriched.raw_data["email_subject"] = candidate.raw_data.get(
                     "email_subject", ""
                 )
+                if content_exclusion(
+                    {"title": enriched.title, "description": enriched.description}, search
+                ):
+                    continue
                 amount, currency = parse_price(enriched.price, enriched.currency)
                 enriched.price = amount
                 enriched.currency = currency

@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from listing_agent.digest import _price, _remaining, deliver, render
+from listing_agent.digest import _price, _remaining, deliver, fetch_rows, render
 from listing_agent.translation import translate_rows
 
 
@@ -37,6 +37,10 @@ def test_render_includes_listing_description_and_new_title():
     assert "Tastemaker Digest: 1 matches" in markup
     assert "background:#edf4f8" in markup
     assert "background:#ababab" not in markup
+    assert "Daily edit" not in markup
+    assert "A considered edit" not in markup
+    assert "Curated with a point of view" not in markup
+    assert ">T</div>" not in markup
 
 
 def test_translate_rows_batches_and_labels_cached_result(monkeypatch):
@@ -153,17 +157,18 @@ def test_render_groups_listing_and_adds_feedback_links():
     assert "Dislike" in markup
     assert "image.jpg" in markup
     assert "Category: Home Decor" in text
-    assert "Classifier used: <strong>Home Decor preference classifier</strong>" in markup
+    assert "Classifier used" not in text
+    assert "Classifier used" not in markup
 
 
-def test_render_shows_when_no_classifier_was_used():
+def test_render_does_not_show_classifier_metadata():
     _, markup = render([{
         "source": "invaluable", "external_id": "fast-1", "title": "Fast tracked lot",
         "price": "50.00", "currency": "USD", "price_usd": "50.00", "url": "https://example.test/item",
         "image_urls": [], "taste_verdict": "like", "category": None,
     }], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc))
     assert "Category: <strong>Not Assigned</strong>" in markup
-    assert "Classifier used: <strong>None</strong>" in markup
+    assert "Classifier used" not in markup
 
 
 def test_render_empty_digest():
@@ -172,23 +177,24 @@ def test_render_empty_digest():
     assert "No matching listings." in markup
 
 
-def test_render_marks_filtered_section():
+def test_render_marks_taste_filtered_section():
     _, markup = render([{
         "section": "Filtered", "source": "invaluable", "external_id": "filtered-1", "title": "Expensive lot",
         "price": "1000.00", "currency": "USD", "price_usd": "1000.00", "url": "https://example.test/item",
-        "image_urls": [], "description": "Private seller notes", "filter_reason": "price exceeds limit", "taste_reason": None,
-        "title_reason": None, "taste_verdict": "filtered"
+        "image_urls": [], "description": "Private seller notes", "filter_reason": "price exceeds limit", "taste_reason": "Not a taste match",
+        "title_reason": None, "taste_verdict": "dislike"
     }], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc))
     assert "FILTERED" in markup
     assert "background:#ffffff;border:1px solid #c77983" in markup
-    assert "price exceeds limit" in markup
+    assert "Not a taste match" in markup
+    assert "price exceeds limit" not in markup
     assert "Private seller notes" not in markup
 
     text, _ = render([{
         "section": "Filtered", "source": "invaluable", "external_id": "filtered-1", "title": "Expensive lot",
         "price": "1000.00", "currency": "USD", "price_usd": "1000.00", "url": "https://example.test/item",
-        "image_urls": [], "description": "Private seller notes", "filter_reason": "price exceeds limit",
-        "taste_verdict": "filtered"
+        "image_urls": [], "description": "Private seller notes", "filter_reason": "price exceeds limit", "taste_reason": "Not a taste match",
+        "taste_verdict": "dislike"
     }], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc))
     assert "Private seller notes" not in text
     assert "Description:" not in text
@@ -199,7 +205,7 @@ def test_render_places_all_passed_listings_before_filtered_listings():
         {
             "section": "Filtered", "source": "ebay", "external_id": "filtered-1", "title": "Filtered listing",
             "price": "1000.00", "currency": "USD", "price_usd": "1000.00", "url": "https://example.test/filtered",
-            "image_urls": [], "filter_reason": "price exceeds limit", "taste_verdict": "filtered",
+            "image_urls": [], "filter_reason": "price exceeds limit", "taste_reason": "Not a taste match", "taste_verdict": "dislike",
         },
         {
             "section": "Passed", "source": "invaluable", "external_id": "passed-1", "title": "Passed invaluable listing",
@@ -241,6 +247,28 @@ def test_render_sorts_listings_by_usd_within_each_source():
     _, markup = render(rows, "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc))
 
     assert markup.index("Cheap") < markup.index("Expensive")
+
+
+def test_fetch_rows_only_includes_taste_filtered_items():
+    class Result:
+        def fetchall(self):
+            return [(
+                "ebay", "disliked", "Disliked listing", "10.00", "USD", "10.00", None,
+                "https://example.test/disliked", [], None, "passed", None, "Relevant", True,
+                "art", "dislike", "Not a taste match",
+            )]
+
+    class Connection:
+        def execute(self, query, params):
+            assert "l.filter_status = 'passed'" in query
+            assert "j.taste_verdict = 'dislike'" in query
+            assert params[1] is True
+            return Result()
+
+    rows = fetch_rows(Connection(), datetime(2026, 8, 28, tzinfo=timezone.utc), include_filtered=True)
+
+    assert rows[0]["section"] == "Filtered"
+    assert rows[0]["taste_verdict"] == "dislike"
 
 
 def test_empty_digest_is_not_delivered():

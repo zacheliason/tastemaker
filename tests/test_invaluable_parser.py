@@ -15,6 +15,34 @@ def test_parse_message_extracts_listing_fields():
     assert items[0].image_urls == ["https://example.test/image.jpg"]
 
 
+def test_parse_message_excludes_configured_scraper_content():
+    message = EmailMessage()
+    message.set_content(
+        '<a href="https://example.test/lot/123">Google cloud platform</a>', subtype="html"
+    )
+    assert parse_message(message, {"id": "test", "exclude_content": ["Google cloud platform"]}) == []
+
+
+def test_content_exclusion_matches_enriched_title_without_matching_similar_text():
+    from listing_agent.filters import content_exclusion
+
+    assert content_exclusion(
+        {"title": "ZenRows", "description": ""}, {"exclude_content": ["Zenrows"]}
+    ) == "Zenrows"
+    assert content_exclusion(
+        {"title": "Google Cloud Platform", "description": ""},
+        {"exclude_content": ["Google cloud platform"]},
+    ) == "Google cloud platform"
+    assert content_exclusion(
+        {"title": "Google cloud platform print", "description": ""},
+        {"exclude_content": ["Zenrows"]},
+    ) is None
+    assert content_exclusion(
+        {"title": "Google cloud platform print", "description": ""},
+        {"exclude_content": ["Google cloud platform"]},
+    ) is None
+
+
 def test_parse_message_extracts_recommendation_lot_links_and_deduplicates_artist():
     message = EmailMessage()
     message["Subject"] = "More art you may like"

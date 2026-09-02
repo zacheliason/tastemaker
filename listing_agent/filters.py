@@ -9,6 +9,47 @@ from .config import configured_sources, enabled_searches
 logger = logging.getLogger(__name__)
 
 
+def _normalized_content(value: str) -> str:
+    return " ".join(value.casefold().split())
+
+
+def content_exclusion(row: dict, search: dict) -> str | None:
+    return next(
+        (phrase for phrase in search.get("exclude_content", [])
+         if _normalized_content(phrase) in {
+             _normalized_content(row.get("title") or ""),
+             _normalized_content(row.get("description") or ""),
+         }),
+        None,
+    )
+
+
+def _shoe_size_values(text: str) -> list[tuple[float, str | None]]:
+    values = []
+    pattern = re.compile(
+        r"\b(?:(women(?:'s)?|womens|men(?:'s)?|mens|w)\s*)?"
+        r"(?:shoe\s+size\s*)?(\d+(?:\.5)?)\b",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(text):
+        gender = match.group(1)
+        if not gender and not re.search(r"shoe\s+size", match.group(0), re.IGNORECASE):
+            continue
+        gender = "women" if gender and gender.casefold().startswith(("w", "women")) else "men" if gender else None
+        values.append((float(match.group(2)), gender))
+    return values
+
+
+def _shoe_size_allowed(actual: object, allowed: list, gender: str | None = None) -> bool:
+    try:
+        actual_value = float(actual)
+    except (TypeError, ValueError):
+        return any(str(actual).casefold() == str(value).casefold() for value in allowed)
+    if gender == "women":
+        actual_value -= 1.5
+    return any(actual_value == float(value) for value in allowed)
+
+
 def _title_size_mismatch(row: dict, search: dict) -> tuple[str, str] | None:
     text = f"{row.get('title') or ''} {row.get('description') or ''}"
     for field, allowed in search.get("allowed_size_fields", {}).items():
@@ -17,12 +58,20 @@ def _title_size_mismatch(row: dict, search: dict) -> tuple[str, str] | None:
             # Common trouser notation: the first number in 38x26 is the waist.
             values.extend(re.findall(r"\b(\d{2})\s*x\s*\d{2}\b", text, re.IGNORECASE))
             values.extend(re.findall(r"\b(?:waist|w)\s*(?:size\s*)?[:#-]?\s*(\d{2})\b", text, re.IGNORECASE))
+        if field == "shoe_size":
+            allowed = search.get("allowed_size_fields", {}).get(field, [])
+            for value, gender in _shoe_size_values(text):
+                if not _shoe_size_allowed(value, allowed, gender):
+                    return field, str(value).removesuffix(".0")
         if values and not any(value.lower() == str(allowed_value).lower() for value in values for allowed_value in allowed):
             return field, values[0]
     return None
 
 
 def evaluate(row: dict, search: dict) -> tuple[str, str | None]:
+    excluded_content = content_exclusion(row, search)
+    if excluded_content:
+        return "filtered", f"excluded content: {excluded_content}"
     title = (row.get("title") or "").lower()
     description = (row.get("description") or "").lower()
     text = f"{title} {description}"
@@ -49,7 +98,11 @@ def evaluate(row: dict, search: dict) -> tuple[str, str | None]:
             return "filtered", f"structured size mismatch: {field}={actual}"
     for field, allowed in search.get("allowed_size_fields", {}).items():
         actual = (row.get("size_fields") or {}).get(field)
-        if actual is not None and not any(str(actual).lower() == str(value).lower() for value in allowed):
+        gender = (row.get("size_fields") or {}).get(f"{field}_gender")
+        if actual is not None and (
+            not _shoe_size_allowed(actual, allowed, gender) if field == "shoe_size"
+            else not any(str(actual).lower() == str(value).lower() for value in allowed)
+        ):
             return "filtered", f"structured size not allowed: {field}={actual} (allowed: {allowed})"
     return "passed", None
 
@@ -68,6 +121,7 @@ def apply(conn, searches: dict, source: str | None = None) -> dict[str, dict[str
         for row in rows:
             data = {"title": row[2], "description": row[3], "price_usd": row[4], "size_fields": row[5]}
             search = dict(source_searches.get(row[1]) or (row[6] or {}).get("_search_config", {}))
+            search.setdefault("exclude_content", configured[current_source].get("exclude_content", []))
             if "max_price_usd" in configured[current_source]:
                 search["max_price_usd"] = configured[current_source]["max_price_usd"]
             status, reason = evaluate(data, search)

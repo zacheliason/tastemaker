@@ -131,6 +131,7 @@ Within each source’s `searches` array, edit:
 - Invaluable uses listing-alert emails from the configured inbox.
 - `max_price_usd` and `required_size_fields` are deterministic filters applied before LLM calls.
 - `allowed_size_fields` can be set on a source to apply one size allowlist to every search, including eBay account saved searches. For example, `{"waist": [28, 29, 30], "shoe_size": [8, 8.5]}`.
+- `exclude_content` can be set on a source for exact configured scraper/content markers; an exact normalized title or description match is rejected before database ingestion.
 - Deterministic outcomes are stored in `listings.filter_reason`; AI title and taste outcomes are stored separately in `ai_judgments.title_reason` and `ai_judgments.taste_reason`.
 - `limit` is the maximum number of source results ingested; `max_price_usd` is the price threshold. They are not duplicates.
 - eBay listings are only inserted once, using the stable eBay item ID or normalized listing URL; previously seen items are not refreshed into the daily digest.

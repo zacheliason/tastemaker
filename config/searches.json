@@ -36,6 +36,10 @@
       "enabled": true,
       "adapter": "invaluable",
       "enrichment_provider": "zenrows",
+      "exclude_content": [
+        "Google cloud platform",
+        "Zenrows"
+      ],
       "max_price_usd": 200,
       "searches": [
         {

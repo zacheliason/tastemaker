@@ -4,6 +4,7 @@ import hashlib
 import logging
 import os
 from datetime import date
+from urllib.parse import urlencode
 
 import httpx
 from langdetect import DetectorFactory, LangDetectException, detect_langs
@@ -21,11 +22,16 @@ def _content_hash(value: str) -> str:
 
 
 def _language(value: str) -> str | None:
+    languages, _ = _language_candidates(value)
+    return languages[0].lang.lower() if languages else None
+
+
+def _language_candidates(value: str):
     try:
         candidates = detect_langs(value)
-    except LangDetectException:
-        return None
-    return candidates[0].lang.lower() if candidates else None
+    except LangDetectException as exc:
+        return [], type(exc).__name__
+    return candidates, None
 
 
 def _cached(conn, hashes: list[str]) -> dict[str, tuple[str, str]]:
@@ -56,13 +62,18 @@ def _record_monthly_usage(conn, month_start: date, chars: int) -> None:
 
 
 def _translate_batch(texts: list[str]) -> list[tuple[str, str]]:
+    logger.info("translation API request: batches=1 descriptions=%d characters=%d", len(texts), sum(len(text) for text in texts))
     response = httpx.post(
         os.environ.get("GOOGLE_TRANSLATE_URL", GOOGLE_TRANSLATE_URL),
         params={"key": os.environ["GOOGLE_TRANSLATE_API_KEY"]},
-        data=[("q", text) for text in texts] + [("target", "en"), ("format", "html")],
+        content=urlencode(
+            [("q", text) for text in texts] + [("target", "en"), ("format", "html")]
+        ).encode("utf-8"),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
         timeout=30,
     )
     response.raise_for_status()
+    logger.info("translation API response: status=%s descriptions=%d", getattr(response, "status_code", "unknown"), len(response.json().get("data", {}).get("translations", [])))
     translations = response.json()["data"]["translations"]
     return [
         (item.get("detectedSourceLanguage", "UNKNOWN").upper(), item["translatedText"])
@@ -79,16 +90,32 @@ def translate_rows(conn, rows: list[dict], usage: dict | None = None) -> int:
         if row.get("section", "Passed") != "Passed":
             continue
         original = (row.get("description") or "").strip()
-        if not original or not any(char.isalpha() for char in original) or _language(original) == "en":
+        content_hash = _content_hash(original) if original else None
+        if not original:
+            logger.info("translation candidate skipped: reason=empty hash=none")
             continue
-        candidates.append((row, original, _content_hash(original)))
+        if not any(char.isalpha() for char in original):
+            logger.info("translation candidate skipped: reason=no_letters hash=%s characters=%d", content_hash[:12], len(original))
+            continue
+        languages, detection_error = _language_candidates(original)
+        language_summary = ",".join(f"{item.lang}:{item.prob:.3f}" for item in languages) or "none"
+        logger.info(
+            "translation language detection: hash=%s characters=%d candidates=%s error=%s",
+            content_hash[:12], len(original), language_summary, detection_error or "none",
+        )
+        if languages and languages[0].lang.lower() == "en":
+            logger.info("translation candidate skipped: reason=english hash=%s", content_hash[:12])
+            continue
+        candidates.append((row, original, content_hash))
 
     if not candidates:
+        logger.info("translation candidates: total=0")
         return 0
     cached = _cached(conn, [item[2] for item in candidates])
     pending = [item for item in candidates if item[2] not in cached]
+    logger.info("translation cache status: candidates=%d cached=%d pending=%d", len(candidates), len(cached), len(pending))
     if pending and not os.environ.get("GOOGLE_TRANSLATE_API_KEY"):
-        logger.warning("GOOGLE_TRANSLATE_API_KEY is not set; leaving non-English descriptions unchanged")
+        logger.warning("translation disabled: reason=missing_api_key pending=%d", len(pending))
         pending = []
 
     month_start = date.today().replace(day=1)
@@ -97,7 +124,7 @@ def translate_rows(conn, rows: list[dict], usage: dict | None = None) -> int:
         conn.execute("select pg_advisory_xact_lock(hashtext(%s))", (f"translation:{month_start}",))
     remaining = max(0, MONTHLY_CHARACTER_LIMIT - _monthly_usage(conn, month_start))
     if pending and not remaining:
-        logger.warning("Google Translation monthly character limit reached; translation disabled")
+        logger.warning("translation disabled: reason=monthly_character_limit pending=%d", len(pending))
 
     for offset in range(0, len(pending), TRANSLATION_BATCH_SIZE):
         batch = pending[offset:offset + TRANSLATION_BATCH_SIZE]
@@ -118,11 +145,20 @@ def translate_rows(conn, rows: list[dict], usage: dict | None = None) -> int:
         remaining -= used
         try:
             translated = _translate_batch([item[1] for item in batch])
-        except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
-            logger.warning("description translation batch failed: %s", exc)
+        except httpx.HTTPStatusError as exc:
+            logger.warning("translation batch failed: reason=http_status status=%s descriptions=%d", exc.response.status_code, len(batch))
+            continue
+        except httpx.RequestError as exc:
+            logger.warning("translation batch failed: reason=request_error error=%s descriptions=%d", type(exc).__name__, len(batch))
+            continue
+        except httpx.HTTPError as exc:
+            logger.warning("translation batch failed: reason=http_error error=%s descriptions=%d", type(exc).__name__, len(batch))
+            continue
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning("translation batch failed: reason=response_shape error=%s descriptions=%d", type(exc).__name__, len(batch))
             continue
         if len(translated) != len(batch):
-            logger.warning("description translation batch returned an unexpected item count")
+            logger.warning("translation batch failed: reason=item_count expected=%d actual=%d", len(batch), len(translated))
             continue
         for (_, _, content_hash), (source_language, translated_text) in zip(batch, translated):
             cached[content_hash] = (source_language, translated_text)
@@ -134,7 +170,7 @@ def translate_rows(conn, rows: list[dict], usage: dict | None = None) -> int:
                 (content_hash, source_language, translated_text),
             )
         if not remaining:
-            logger.warning("Google Translation monthly character limit reached; translation disabled")
+            logger.warning("translation disabled: reason=monthly_character_limit")
             break
 
     translated_count = 0

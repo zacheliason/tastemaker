@@ -12,7 +12,6 @@ from urllib.parse import quote
 import httpx
 from bs4 import BeautifulSoup, Comment
 
-from .config import required_env
 from .translation import translate_rows
 
 
@@ -130,39 +129,35 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
     .summary-cell, .section-cell {{ padding-left:18px !important; padding-right:18px !important; }}
   }}
 </style>
-<div class="digest-wrap" style="max-width:720px;margin:0 auto">
+<div class="digest-wrap" style="max-width:860px;margin:0 auto">
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#182b2b">
   <tr><td class="masthead-cell" style="padding:30px 34px 27px;border-bottom:5px solid #d7ed62">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
-      <td><p style="margin:0 0 20px;color:#d7ed62;font-size:10px;font-weight:700;letter-spacing:2.6px;text-transform:uppercase">Tastemaker <span style="color:#71827c">/</span> Daily edit</p>
-      <h1 class="digest-title" style="margin:0;color:#f7f5ee;font-family:Georgia,'Times New Roman',serif;font-size:38px;line-height:1.02;font-weight:400;letter-spacing:-1px">{html.escape(subject)}</h1>
-      <p style="margin:15px 0 0;color:#b9c7c0;font-size:12px;letter-spacing:.25px">A considered edit from {html.escape(pretty_start)}</p></td>
-      <td width="54" valign="top" style="padding-top:2px;text-align:right"><div style="width:42px;height:42px;border:1px solid #536761;border-radius:50%;color:#d7ed62;font-family:Georgia,serif;font-size:19px;line-height:42px;text-align:center">T</div></td>
+      <td><h1 class="digest-title" style="margin:0;color:#f7f5ee;font-family:Georgia,'Times New Roman',serif;font-size:38px;line-height:1.02;font-weight:400;letter-spacing:-1px">{html.escape(subject)}</h1>
+       <p style="margin:15px 0 0;color:#b9c7c0;font-size:12px;letter-spacing:.25px">{html.escape(pretty_start)}</p></td>
     </tr></table>
   </td></tr>
 </table>
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#f7f5ee;border-left:1px solid #dce6e1;border-right:1px solid #dce6e1">
-  <tr><td class="summary-cell" style="padding:18px 34px;border-bottom:1px solid #dce6e1"><p style="margin:0;color:#55706b;font-size:10px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase">{html.escape(summary)}</p><p style="margin:5px 0 0;color:#9aa8a2;font-family:Georgia,serif;font-size:14px">Curated with a point of view.</p></td></tr>
+  <tr><td class="summary-cell" style="padding:18px 24px;border-bottom:1px solid #dce6e1"><p style="margin:0;color:#55706b;font-size:10px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase">{html.escape(summary)}</p></td></tr>
 </table>''']
     for (section, source), items in sorted(grouped.items(), key=lambda item: (item[0][0] != "Passed", item[0][1])):
-        text.extend([section.upper(), source.title(), "=" * len(source)])
+        text.extend([source.title(), "=" * len(source)])
         section_color = "#557c1d" if section == "Passed" else "#a6534c"
-        section_note = "Selected for your edit" if section == "Passed" else "Set aside by the configured filters"
         blocks.append(f'''<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#f7f5ee;border-left:1px solid #dce6e1;border-right:1px solid #dce6e1">
- <tr><td class="section-cell" style="padding:32px 34px 13px"><p style="margin:0 0 8px;color:#a6b1ab;font-size:10px;font-weight:700;letter-spacing:2px">SOURCE / {html.escape(source.title()).upper()}</p><h2 style="margin:0 0 4px;color:{section_color};font-family:Georgia,'Times New Roman',serif;font-size:25px;line-height:1.1;font-weight:400;letter-spacing:-.3px">{html.escape(section)}</h2><p style="margin:0;color:#7b8984;font-size:12px">{html.escape(section_note)}</p></td></tr></table>''')
+ <tr><td class="section-cell" style="padding:28px 24px 13px"><p style="margin:0;color:#a6b1ab;font-size:10px;font-weight:700;letter-spacing:2px">SOURCE / {html.escape(source.title()).upper()}</p></td></tr></table>''')
         for row in sorted(items, key=_usd_sort_key):
             filtered = section == "Filtered"
-            reason = row.get("filter_reason") or row.get("taste_reason") or row.get("title_reason") or "Matched configured search"
+            reason = row.get("taste_reason") or row.get("filter_reason") or row.get("title_reason") or "Matched configured search"
             like = _feedback_link(feedback_recipient, "like", row["source"], row["external_id"], row["title"])
             dislike = _feedback_link(feedback_recipient, "dislike", row["source"], row["external_id"], row["title"])
             remaining = _remaining(row.get("sale_end_at"))
             category = _category_label(row.get("category"))
-            classifier = f"{category} preference classifier" if row.get("category") else "None"
             description = "" if filtered else _description(row.get("description"))
             text.extend([row["title"], _price(row["price"], row["currency"], row["price_usd"]), row["url"]])
             if remaining:
                 text.append(remaining)
-            text.extend([f"Category: {category}", f"Classifier used: {classifier}", f"Verdict: {row['taste_verdict']}. {reason}", f"Like: {like}", f"Dislike: {dislike}", ""])
+            text.extend([f"Category: {category}", f"Verdict: {row['taste_verdict']}. {reason}", f"Like: {like}", f"Dislike: {dislike}", ""])
             if description:
                 text.insert(-1, f"Description: {description}")
             image = row["image_urls"][0] if row["image_urls"] else ""
@@ -175,12 +170,12 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
             description_html = f'<p style="margin:0 0 12px;font-size:13px;line-height:1.45;color:#55706b"><strong>Description</strong><br>{description_markup}</p>' if description_markup else ""
             verdict = row.get("taste_verdict", "uncertain").title()
             blocks.append(f'''<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#f7f5ee;border-left:1px solid #dce6e1;border-right:1px solid #dce6e1">
- <tr><td style="padding:8px 34px 20px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:{card_background};border:1px solid {card_border}">
+ <tr><td style="padding:8px 24px 20px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:{card_background};border:1px solid {card_border}">
  <tr><td class="listing-media" width="42%" valign="top" style="padding:0;background:#e8eeea">{image_html}</td><td class="listing-copy" width="58%" valign="top" style="padding:23px 25px 21px">
    {filtered_label}<p style="margin:0 0 9px;color:{section_color};font-size:10px;font-weight:700;letter-spacing:1.7px;text-transform:uppercase">{verdict} / EDIT VERDICT</p><h3 style="margin:0 0 10px;font-family:Georgia,'Times New Roman',serif;font-size:23px;line-height:1.1;font-weight:400;letter-spacing:-.35px"><a style="color:#182b2b;text-decoration:none" href="{html.escape(row['url'], quote=True)}">{html.escape(row['title'])}</a></h3>
    <p style="margin:0 0 5px;color:#557c1d;font-size:17px;font-weight:700;letter-spacing:-.15px">{html.escape(_price(row['price'], row['currency'], row['price_usd']))}</p>
    {f'<p style="margin:0 0 15px;color:#7b8984;font-size:11px">{html.escape(remaining)}</p>' if remaining else '<div style="height:15px"></div>'}
-   <p style="margin:0 0 14px;color:#71807a;font-size:11px;line-height:1.55">Category: <strong>{html.escape(category)}</strong><br>Classifier used: <strong>{html.escape(classifier)}</strong></p>
+    <p style="margin:0 0 14px;color:#71807a;font-size:11px;line-height:1.55">Category: <strong>{html.escape(category)}</strong></p>
    {description_html}<p style="margin:0 0 17px;color:#294442;font-size:13px;line-height:1.5">{html.escape(reason)}</p>
    <p style="margin:0;font-size:12px"><a style="display:inline-block;padding:9px 15px;background:#d7ed62;color:#182b2b;font-weight:700;text-decoration:none" href="{html.escape(like, quote=True)}">Like</a>&nbsp;&nbsp;<a style="display:inline-block;padding:8px 14px;border:1px solid #a9b9b2;color:#55706b;text-decoration:none" href="{html.escape(dislike, quote=True)}">Dislike</a></p>
  </td></tr></table></td></tr></table>''')
@@ -206,15 +201,13 @@ def fetch_rows(conn, start: datetime, include_filtered: bool = False) -> list[di
         l.description, l.url, l.image_urls, l.sale_end_at, l.filter_status, l.filter_reason,
         j.title_reason, j.title_pass, j.category, j.taste_verdict, j.taste_reason
         from listings l left join ai_judgments j on j.listing_id = l.id
-        where l.fetched_at >= %s and ((l.filter_status = 'passed' and j.title_pass = true and j.taste_verdict in ('like', 'uncertain'))
-          or (%s and l.filter_status = 'filtered'))
-        order by case when l.filter_status = 'passed' then 0 else 1 end, l.source, l.fetched_at desc""", (start, include_filtered)).fetchall()
+        where l.fetched_at >= %s and j.title_pass = true and
+          (j.taste_verdict in ('like', 'uncertain') or (%s and l.filter_status = 'passed' and j.taste_verdict = 'dislike'))
+        order by case when j.taste_verdict = 'dislike' then 1 else 0 end, l.source, l.fetched_at desc""", (start, include_filtered)).fetchall()
     keys = ("source", "external_id", "title", "price", "currency", "price_usd", "description", "url", "image_urls", "sale_end_at", "filter_status", "filter_reason", "title_reason", "title_pass", "category", "taste_verdict", "taste_reason")
     output = [dict(zip(keys, row)) for row in rows]
     for row in output:
-        row["section"] = "Passed" if row["filter_status"] == "passed" else "Filtered"
-        if row["section"] == "Filtered":
-            row["taste_verdict"] = "filtered"
+        row["section"] = "Filtered" if row["taste_verdict"] == "dislike" else "Passed"
     return output
 
 
