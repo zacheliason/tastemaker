@@ -10,6 +10,7 @@ dependencies = [
   "psycopg[binary]>=3.2,<4",
   "python-dotenv>=1.0,<2",
   "Pillow>=10,<12",
+  "matplotlib>=3.8,<4",
   "pillow-heif>=0.18,<1",
   "torch>=2.3,<3",
   "transformers>=4.45,<5",

@@ -182,7 +182,7 @@ def _preference_classifier(conn, storage, category: str, cache: dict):
         if vector is None and row[2] and row[3]:
             try:
                 vector = image_embedding(storage.signed_url(row[2], row[3]))
-                conn.execute("update taste_references set embedding = %s::jsonb where id = %s", (json.dumps(vector), row[0]))
+                conn.execute("update taste_references set embedding = %s::jsonb, embedding_generated_at = now() where id = %s", (json.dumps(vector), row[0]))
             except Exception as exc:
                 logger.warning("Reference embedding failed: category=%s id=%s error=%s", category, row[0], exc)
         if vector is not None and row[1] in {"like", "dislike"}:
@@ -222,7 +222,7 @@ def _nearest_references(conn, storage, listing: dict, category: str, limit: int,
             if reference["embedding"] is None:
                 try:
                     reference["embedding"] = image_embedding(reference["url"])
-                    conn.execute("update taste_references set embedding = %s::jsonb where id = %s", (json.dumps(reference["embedding"]), reference["id"]))
+                    conn.execute("update taste_references set embedding = %s::jsonb, embedding_generated_at = now() where id = %s", (json.dumps(reference["embedding"]), reference["id"]))
                 except Exception as exc:
                     logger.warning("Reference embedding failed; using reference order: category=%s id=%s error=%s", category, reference["id"], exc)
             references.append(reference)

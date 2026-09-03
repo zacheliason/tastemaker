@@ -3,7 +3,9 @@ from __future__ import annotations
 import html
 import hashlib
 import os
+import re
 import smtplib
+from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from email.message import EmailMessage
@@ -63,12 +65,22 @@ def _category_label(category: str | None) -> str:
 
 
 def _description(value: str | None) -> str:
-    return " ".join((value or "").split())
+    translated_from, description = _description_parts(value)
+    prefix = f"Translated from {translated_from}: " if translated_from else ""
+    return prefix + " ".join(description.split())
+
+
+def _description_parts(value: str | None) -> tuple[str | None, str]:
+    match = re.match(r"^\(TRANSLATED FROM ([^:]+):\s*(.*?)\)$", value or "", flags=re.I | re.S)
+    if match:
+        return match.group(1).upper(), match.group(2)
+    return None, value or ""
 
 
 def _description_html(value: str | None) -> str:
     """Keep useful description markup while removing executable HTML."""
-    soup = BeautifulSoup(value or "", "html.parser")
+    _, value = _description_parts(value)
+    soup = BeautifulSoup(value, "html.parser")
     allowed = {"b", "strong", "i", "em", "u", "br", "p", "ul", "ol", "li"}
     for node in soup.find_all(string=lambda text: isinstance(text, Comment)):
         node.extract()
@@ -101,7 +113,7 @@ def _usage_cost(usage: dict) -> tuple[float, float, float, float]:
     return input_cost, output_cost, cache_read_cost, input_cost + output_cost + cache_read_cost
 
 
-def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient: str | None = None, usage: dict | None = None, image_sources: dict[str, str] | None = None, translation_usage: dict | None = None) -> tuple[str, str]:
+def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient: str | None = None, usage: dict | None = None, image_sources: dict[str, str] | None = None, translation_usage: dict | None = None, efficiency: list[dict] | None = None, efficiency_image_source: str | None = None) -> tuple[str, str]:
     feedback_recipient = feedback_recipient or recipient
     grouped = {}
     for row in rows:
@@ -129,7 +141,7 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
     .summary-cell, .section-cell {{ padding-left:18px !important; padding-right:18px !important; }}
   }}
 </style>
-<div class="digest-wrap" style="max-width:860px;margin:0 auto">
+ <div class="digest-wrap" style="max-width:960px;margin:0 auto">
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#182b2b">
   <tr><td class="masthead-cell" style="padding:30px 34px 27px;border-bottom:5px solid #d7ed62">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
@@ -166,11 +178,13 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
             card_background = "#ffffff"
             card_border = "#c77983" if filtered else "#cbdbe5"
             filtered_label = '<p style="margin:0 0 10px;color:#a14d58;font-size:10px;font-weight:700;letter-spacing:1.5px">FILTERED</p>' if filtered else ""
+            translated_from, _ = _description_parts(row.get("description"))
             description_markup = "" if filtered else _description_html(row.get("description"))
-            description_html = f'<p style="margin:0 0 12px;font-size:13px;line-height:1.45;color:#55706b"><strong>Description</strong><br>{description_markup}</p>' if description_markup else ""
+            translation_label = f'<span style="display:block;margin:0 0 4px;color:#a6534c;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase">Translated from {html.escape(translated_from)}</span>' if translated_from else ""
+            description_html = f'<p class="listing-description" style="margin:0 0 12px;font-size:13px;line-height:1.45;color:#55706b;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden"><strong>Description</strong>{translation_label}<br>{description_markup}</p>' if description_markup else ""
             verdict = row.get("taste_verdict", "uncertain").title()
             blocks.append(f'''<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#f7f5ee;border-left:1px solid #dce6e1;border-right:1px solid #dce6e1">
- <tr><td style="padding:8px 24px 20px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:{card_background};border:1px solid {card_border}">
+ <tr><td style="padding:8px 12px 20px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:{card_background};border:1px solid {card_border}">
  <tr><td class="listing-media" width="42%" valign="top" style="padding:0;background:#e8eeea">{image_html}</td><td class="listing-copy" width="58%" valign="top" style="padding:23px 25px 21px">
    {filtered_label}<p style="margin:0 0 9px;color:{section_color};font-size:10px;font-weight:700;letter-spacing:1.7px;text-transform:uppercase">{verdict} / EDIT VERDICT</p><h3 style="margin:0 0 10px;font-family:Georgia,'Times New Roman',serif;font-size:23px;line-height:1.1;font-weight:400;letter-spacing:-.35px"><a style="color:#182b2b;text-decoration:none" href="{html.escape(row['url'], quote=True)}">{html.escape(row['title'])}</a></h3>
    <p style="margin:0 0 5px;color:#557c1d;font-size:17px;font-weight:700;letter-spacing:-.15px">{html.escape(_price(row['price'], row['currency'], row['price_usd']))}</p>
@@ -182,6 +196,18 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
     if not rows:
         text.append("No matching listings.")
         blocks.append('<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#f7f5ee;border:1px solid #dce6e1"><tr><td style="padding:42px 28px 50px;color:#55706b;font-family:Georgia,serif;font-size:22px">No matching listings.</td></tr></table>')
+    if efficiency:
+        text.extend(["", "Pipeline pulse (last 5 days):"])
+        for day in efficiency:
+            text.append(f"{day['date']}: feedback {day['feedback']}, embedded {day['embedded']}, listings {day['listings']}, judged {day['judged']}")
+        blocks.append('<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#edf4f8;border:1px solid #dce6e1"><tr><td style="padding:24px"><p style="margin:0 0 14px;color:#182b2b;font-family:Georgia,serif;font-size:22px">Pipeline pulse</p><p style="margin:0 0 14px;color:#55706b;font-size:11px">Five-day activity, so you can see what the daily edit is processing.</p>')
+        metric_labels = (("feedback emails", "feedback"), ("taste references embedded", "embedded"), ("listings ingested", "listings"), ("items judged", "judged"))
+        if efficiency_image_source:
+            blocks.append(f'<img src="{html.escape(efficiency_image_source, quote=True)}" alt="Five-day pipeline activity chart" width="760" style="display:block;width:100%;height:auto;margin:0 0 12px">')
+        for label, key in metric_labels:
+            values = [int(day.get(key, 0)) for day in efficiency]
+            blocks.append(f'<p style="margin:10px 0 3px;color:#55706b;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase">{label}: {values[-1]}</p><p style="margin:2px 0;color:#8a9993;font-size:10px">{" / ".join(str(value) for value in values)}</p>')
+        blocks.append('</td></tr></table>')
     usage = usage or {"prompt_tokens": 0, "completion_tokens": 0, "cache_read_tokens": 0}
     input_cost, output_cost, cache_read_cost, total_cost = _usage_cost(usage)
     cost_line = f"Estimated LLM cost: ${total_cost:.6f} (input ${input_cost:.6f}, output ${output_cost:.6f}, cache read ${cache_read_cost:.6f})"
@@ -201,7 +227,7 @@ def fetch_rows(conn, start: datetime, include_filtered: bool = False) -> list[di
         l.description, l.url, l.image_urls, l.sale_end_at, l.filter_status, l.filter_reason,
         j.title_reason, j.title_pass, j.category, j.taste_verdict, j.taste_reason
         from listings l left join ai_judgments j on j.listing_id = l.id
-        where l.fetched_at >= %s and j.title_pass = true and
+        where l.fetched_at >= %s and l.filter_status = 'passed' and j.title_pass = true and
           (j.taste_verdict in ('like', 'uncertain') or (%s and l.filter_status = 'passed' and j.taste_verdict = 'dislike'))
         order by case when j.taste_verdict = 'dislike' then 1 else 0 end, l.source, l.fetched_at desc""", (start, include_filtered)).fetchall()
     keys = ("source", "external_id", "title", "price", "currency", "price_usd", "description", "url", "image_urls", "sale_end_at", "filter_status", "filter_reason", "title_reason", "title_pass", "category", "taste_verdict", "taste_reason")
@@ -214,6 +240,48 @@ def fetch_rows(conn, start: datetime, include_filtered: bool = False) -> list[di
 def fetch_usage(conn, start: datetime) -> dict:
     row = conn.execute("select coalesce(sum(prompt_tokens), 0), coalesce(sum(completion_tokens), 0), coalesce(sum(total_tokens), 0), coalesce(sum(cache_read_tokens), 0) from llm_usage where recorded_at >= %s", (start,)).fetchone()
     return {"prompt_tokens": row[0], "completion_tokens": row[1], "total_tokens": row[2], "cache_read_tokens": row[3]}
+
+
+def fetch_efficiency(conn, start: datetime) -> list[dict]:
+    rows = conn.execute("""select day::date,
+        (select count(*) from feedback_events where processed_at::date = day::date) as feedback,
+        (select count(*) from taste_references where embedding_generated_at::date = day::date) as embedded,
+        (select count(*) from listings where fetched_at::date = day::date) as listings,
+        (select count(*) from ai_judgments where judged_at::date = day::date) as judged
+        from generate_series(%s::date - interval '4 days', %s::date, interval '1 day') as day
+        order by day""", (start.date(), start.date())).fetchall()
+    return [{"date": row[0], "feedback": row[1], "embedded": row[2], "listings": row[3], "judged": row[4]} for row in rows]
+
+
+def efficiency_figure(efficiency: list[dict]) -> bytes:
+    """Render the pipeline trend as an email-safe PNG attachment."""
+    import matplotlib.pyplot as plt
+
+    labels = [str(day["date"])[5:] for day in efficiency]
+    series = (
+        ("Feedback", "feedback", "#a6534c"),
+        ("Embedded", "embedded", "#557c1d"),
+        ("Listings", "listings", "#55706b"),
+        ("Judged", "judged", "#b49a43"),
+    )
+    figure, axes = plt.subplots(2, 2, figsize=(10, 4.2), dpi=160, facecolor="#edf4f8")
+    figure.subplots_adjust(left=0.07, right=0.98, top=0.84, bottom=0.18, wspace=0.22, hspace=0.55)
+    figure.suptitle("PIPELINE PULSE / LAST 5 DAYS", x=0.07, ha="left", color="#182b2b", fontsize=11, fontweight="bold")
+    for axis, (title, key, color) in zip(axes.flat, series):
+        values = [int(day.get(key, 0)) for day in efficiency]
+        axis.plot(labels, values, color=color, linewidth=2.4, marker="o", markersize=4, markerfacecolor="#d7ed62", markeredgewidth=0)
+        axis.fill_between(range(len(labels)), values, color=color, alpha=0.08)
+        axis.set_title(title, loc="left", color="#55706b", fontsize=9, fontweight="bold", pad=7)
+        axis.set_ylim(bottom=0)
+        axis.grid(axis="y", color="#dce6e1", linewidth=0.8)
+        axis.set_axisbelow(True)
+        axis.tick_params(axis="both", colors="#8a9993", labelsize=8, length=0)
+        axis.spines[:].set_visible(False)
+        axis.set_yticks(sorted(set([0, max(values)])))
+    output = BytesIO()
+    figure.savefig(output, format="png", facecolor=figure.get_facecolor(), bbox_inches="tight")
+    plt.close(figure)
+    return output.getvalue()
 
 
 def download_images(rows: list[dict]) -> tuple[dict[str, str], list[tuple[str, bytes, str, str]]]:
@@ -257,8 +325,7 @@ def send(message: EmailMessage, host: str, port: int, username: str, password: s
 
 def deliver(conn, start: datetime, recipient: str, dry_run: bool = False, include_filtered: bool = False) -> int:
     rows = fetch_rows(conn, start, include_filtered)
-    passed_count = sum(row["section"] == "Passed" for row in rows)
-    if not passed_count and not dry_run:
+    if not rows and not dry_run:
         return 0
     if not dry_run:
         conn.execute(
@@ -274,7 +341,10 @@ def deliver(conn, start: datetime, recipient: str, dry_run: bool = False, includ
     image_sources, attachments = download_images(rows) if not dry_run else ({}, [])
     translation_usage = {}
     translate_rows(conn, rows, translation_usage)
-    text, markup = render(rows, recipient, start, feedback_recipient, fetch_usage(conn, start), image_sources, translation_usage)
+    efficiency = fetch_efficiency(conn, start)
+    efficiency_source = "cid:efficiency-pulse"
+    figure = efficiency_figure(efficiency) if efficiency else None
+    text, markup = render(rows, recipient, start, feedback_recipient, fetch_usage(conn, start), image_sources, translation_usage, efficiency, efficiency_source if figure else None)
     message = EmailMessage()
     message["Subject"] = f"Tastemaker Digest: {len(rows)} matches"
     message["From"] = os.environ.get("DIGEST_FROM") or os.environ.get("SMTP_USERNAME") or os.environ.get("IMAP_USERNAME", "listing-agent@localhost")
@@ -285,6 +355,9 @@ def deliver(conn, start: datetime, recipient: str, dry_run: bool = False, includ
         html_part = message.get_payload()[-1]
         for cid, data, maintype, subtype in attachments:
             html_part.add_related(data, maintype=maintype, subtype=subtype, cid=cid, disposition="inline")
+    if figure:
+        html_part = message.get_payload()[-1]
+        html_part.add_related(figure, maintype="image", subtype="png", cid="efficiency-pulse", disposition="inline")
     if not dry_run:
         host = os.environ.get("SMTP_HOST") or ("smtp.gmail.com" if os.environ.get("IMAP_HOST") == "imap.gmail.com" else "")
         username = os.environ.get("SMTP_USERNAME") or os.environ.get("IMAP_USERNAME", "")

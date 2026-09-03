@@ -277,16 +277,17 @@ def fetch(search: dict) -> list[Listing]:
     )
     try:
         mailbox.login(env["IMAP_USERNAME"], env["IMAP_PASSWORD"])
-        mailbox.select(os.environ.get("IMAP_FOLDER", "INBOX"), readonly=True)
-        criteria = "ALL"
+        mailbox.select(os.environ.get("IMAP_FOLDER", "INBOX"), readonly=False)
+        criteria = "UNSEEN"
         if search.get("senders"):
-            criteria = (
-                "(" + " ".join(f'FROM "{sender}"' for sender in search["senders"]) + ")"
-            )
+            senders = search["senders"]
+            sender_query = f'FROM "{senders[0]}"' if len(senders) == 1 else "(OR " + " ".join(f'FROM "{sender}"' for sender in senders) + ")"
+            criteria = f"(UNSEEN {sender_query})"
         _, data = mailbox.search(None, criteria)
         listings = []
         for message_id in data[0].split():
             _, raw = mailbox.fetch(message_id, "(RFC822)")
+            mailbox.store(message_id, "+FLAGS", "(\\Seen)")
             message = email.message_from_bytes(raw[0][1])
             sender = parseaddr(message.get("From", ""))[1].lower()
             if search.get("sender_domains") and not any(

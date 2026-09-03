@@ -114,7 +114,7 @@ def main() -> None:
         start = datetime.fromisoformat(args.since) if args.since else default_start()
         with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
             count = deliver(conn, start, recipient, args.dry_run, digest_config.get("include_filtered", False))
-        status = "rendered" if args.dry_run else ("sent" if count else "not sent; no passing listings")
+        status = "rendered" if args.dry_run else ("sent" if count else "not sent; no listings")
         print(f"digest {status}: {count} listings")
         return
     configured = dict(configured_sources(config))
