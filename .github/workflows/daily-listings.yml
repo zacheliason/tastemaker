@@ -30,6 +30,7 @@ jobs:
       IMAP_USERNAME: ${{ secrets.IMAP_USERNAME }}
       IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
       IMAP_FOLDER: ${{ secrets.IMAP_FOLDER }}
+      FEEDBACK_FROM: ${{ secrets.FEEDBACK_FROM }}
       FREECURRENCYAPI_KEY: ${{ secrets.FREECURRENCYAPI_KEY }}
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
       SMTP_PORT: ${{ secrets.SMTP_PORT }}

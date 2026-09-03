@@ -63,6 +63,7 @@ IMAP_PORT
 IMAP_USERNAME
 IMAP_PASSWORD
 IMAP_FOLDER
+FEEDBACK_FROM
 FREECURRENCYAPI_KEY
 SMTP_HOST
 SMTP_PORT
@@ -81,7 +82,7 @@ SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 ```
 
-`IMAP_PASSWORD` and `SMTP_PASSWORD` may use the same Google App Password. `IMAP_USERNAME` receives Like/Dislike feedback replies. `DIGEST_TO` receives the digest.
+`IMAP_PASSWORD` and `SMTP_PASSWORD` may use the same Google App Password. `IMAP_USERNAME` receives Like/Dislike feedback replies. Set `FEEDBACK_FROM` to the email address you use to send those feedback replies; it is the trusted sender allowlist entry. If it is omitted, the ingest falls back to `DIGEST_FROM` and then `IMAP_USERNAME`. `DIGEST_TO` receives the digest.
 
 Never put secret values in workflow YAML or committed configuration files.
 
