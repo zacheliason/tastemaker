@@ -63,6 +63,8 @@ IMAP_PORT
 IMAP_USERNAME
 IMAP_PASSWORD
 IMAP_FOLDER
+IMAP_INGESTED_FOLDER
+IMAP_FAILED_FOLDER
 FEEDBACK_FROM
 FREECURRENCYAPI_KEY
 SMTP_HOST
@@ -83,6 +85,8 @@ SMTP_PORT=587
 ```
 
 `IMAP_PASSWORD` and `SMTP_PASSWORD` may use the same Google App Password. `IMAP_USERNAME` receives Like/Dislike feedback replies. Set `FEEDBACK_FROM` to the email address you use to send those feedback replies; it is the trusted sender allowlist entry. If it is omitted, the ingest falls back to `DIGEST_FROM` and then `IMAP_USERNAME`. `DIGEST_TO` receives the digest.
+
+Invaluable alert emails are moved after processing: emails that produce one or more listing records go to `IMAP_INGESTED_FOLDER` (default `Invaluable/Ingested`), while matching emails that produce no records or fail during processing go to `IMAP_FAILED_FOLDER` (default `Invaluable/Not Ingested`). Set either value to an empty string to disable that move. On Gmail, these are labels/folders created through IMAP.
 
 Never put secret values in workflow YAML or committed configuration files.
 
@@ -130,6 +134,7 @@ Within each source’s `searches` array, edit:
 - Set `account_saved_searches` to `true` to retrieve the authenticated eBay buyer's Saved Searches through `GetMyeBayBuying`; this requires `EBAY_REFRESH_TOKEN`.
 - When `account_saved_searches` is enabled, the account's saved searches are the complete eBay search set; entries in that source's `searches` array are ignored.
 - Invaluable uses listing-alert emails from the configured inbox.
+- Invaluable `New auctions ... posted` emails are treated as local-auction catalogs. The configured `catalog_categories` are checked as exact catalog facets; an auction is skipped when none are present. Matching catalog pages are crawled across pagination, and resulting digest cards carry a `LOCAL` badge.
 - `max_price_usd` and `required_size_fields` are deterministic filters applied before LLM calls.
 - `allowed_size_fields` can be set on a source to apply one size allowlist to every search, including eBay account saved searches. For example, `{"waist": [28, 29, 30], "shoe_size": [8, 8.5]}`.
 - `exclude_content` can be set on a source for exact configured scraper/content markers; an exact normalized title or description match is rejected before database ingestion.

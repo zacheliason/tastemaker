@@ -7,6 +7,7 @@ import json
 import os
 import re
 import time
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from email.header import decode_header
@@ -14,6 +15,7 @@ from email.message import Message
 from email.utils import parseaddr
 
 from bs4 import BeautifulSoup
+import httpx
 
 from .config import required_env
 from .filters import content_exclusion
@@ -67,6 +69,25 @@ def _listing_key(value: str | None) -> str:
     return f"invaluable-lot:{match.group(1)}" if match else normalized
 
 
+def _move_message(mailbox, message_id: bytes, folder: str) -> None:
+    """Move a message within the selected IMAP mailbox via COPY + delete."""
+    if not folder:
+        return
+    status, _ = mailbox.create(folder)
+    if status not in {"OK", "NO"}:
+        raise RuntimeError(f"could not create IMAP folder {folder!r}")
+    status, response = mailbox.copy(message_id, folder)
+    if status != "OK":
+        raise RuntimeError(
+            f"could not copy message to IMAP folder {folder!r}: {response!r}"
+        )
+    status, response = mailbox.store(message_id, "+FLAGS", "(\\Deleted)")
+    if status != "OK":
+        raise RuntimeError(
+            f"could not remove message from source IMAP folder: {response!r}"
+        )
+
+
 def _date(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -101,6 +122,129 @@ def _deduplicate_repeated_text(value: str) -> str:
     if midpoint and len(words) % 2 == 0 and words[:midpoint] == words[midpoint:]:
         return " ".join(words[:midpoint])
     return value
+
+
+def _catalog_links(message: Message) -> list[str]:
+    soup = BeautifulSoup(_html(message), "html.parser")
+    links = []
+    for link in soup.select("a[href]"):
+        text = link.get_text(" ", strip=True).lower()
+        title = (link.get("title") or "").lower()
+        if "view catalog" in text or "view new " in title and "catalog" in title:
+            links.append(link["href"])
+    return list(dict.fromkeys(links))
+
+
+def _is_catalog_email(message: Message) -> bool:
+    subject = _text(message.get("Subject")).lower()
+    return "new auction" in subject and bool(_catalog_links(message))
+
+
+def _resolve_catalog_url(url: str) -> str:
+    if "/catalog/" in url:
+        return url
+    response = httpx.get(url, follow_redirects=True, timeout=30)
+    response.raise_for_status()
+    return str(response.url)
+
+
+def _catalog_url(url: str, category: str, page: int) -> str:
+    parsed = urlsplit(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.pop("utm_term", None)
+    query.pop("utm_campaign", None)
+    query.pop("utm_content", None)
+    query.pop("utm_medium", None)
+    query.pop("utm_source", None)
+    query["page"] = str(page)
+    query["size"] = "48"
+    query["categoryName" if "jewelry" in category.lower() else "supercategoryName"] = category
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), ""))
+
+
+def _catalog_available_categories(html: str, categories: list[str]) -> list[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    available = set()
+    for checkbox in soup.select('input[type="checkbox"][aria-label]'):
+        label = checkbox.get("aria-label", "").removesuffix(" checkbox")
+        available.update(part.strip() for part in label.split(","))
+    for label in soup.select("label"):
+        text = label.get_text(" ", strip=True)
+        available.update(
+            category for category in categories
+            if re.match(rf"^{re.escape(category)}(?:\d+)?$", text)
+        )
+    return [category for category in categories if category in available]
+
+
+def parse_catalog_page(html: str, search: dict) -> list[Listing]:
+    soup = BeautifulSoup(html, "html.parser")
+    output = []
+    seen = set()
+    for link in soup.select('a[href*="/auction-lot/"]'):
+        url = strip_query(link.get("href"))
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        title = link.get_text(" ", strip=True)
+        image = link.select_one("img[src]")
+        if not title:
+            title = image.get("alt", "") if image else ""
+        if not title:
+            continue
+        block = link.parent.get_text(" ", strip=True)
+        price, currency = _price(block)
+        output.append(
+            Listing(
+                "invaluable",
+                search["id"],
+                hashlib.sha256(url.encode()).hexdigest()[:32],
+                title,
+                price,
+                currency,
+                url,
+                strip_queries([image["src"]]) if image else [],
+                block,
+                raw_data={"local": True, "email_subject": search.get("email_subject", "")},
+            )
+        )
+    return output
+
+
+def fetch_catalog_email(message: Message, search: dict) -> list[Listing]:
+    from .zenrows import fetch_catalog_html
+
+    categories = search.get("catalog_categories", [])
+    output = []
+    seen_catalogs = set()
+    for tracked_url in _catalog_links(message):
+        catalog_url = _resolve_catalog_url(tracked_url)
+        catalog_key = strip_query(catalog_url)
+        if catalog_key in seen_catalogs:
+            continue
+        seen_catalogs.add(catalog_key)
+        first_page = fetch_catalog_html(catalog_url) if categories else ""
+        available = _catalog_available_categories(first_page, categories)
+        if not available:
+            continue
+        for category in available:
+            page = 1
+            while page <= search.get("catalog_max_pages", 100):
+                page_html = fetch_catalog_html(_catalog_url(catalog_url, category, page))
+                page_items = parse_catalog_page(
+                    page_html,
+                    {**search, "email_subject": _text(message.get("Subject"))},
+                )
+                if not page_items:
+                    break
+                output.extend(page_items)
+                if len(page_items) < 48:
+                    break
+                page += 1
+    unique = {}
+    for item in output:
+        unique[item.url] = item
+    return list(unique.values())[: search.get("limit", 200)]
 
 
 def parse_message(message: Message, search: dict) -> list[Listing]:
@@ -277,7 +421,14 @@ def fetch(search: dict) -> list[Listing]:
     )
     try:
         mailbox.login(env["IMAP_USERNAME"], env["IMAP_PASSWORD"])
-        mailbox.select(os.environ.get("IMAP_FOLDER", "INBOX"), readonly=False)
+        source_folder = os.environ.get("IMAP_FOLDER", "INBOX")
+        ingested_folder = os.environ.get(
+            "IMAP_INGESTED_FOLDER", "Invaluable/Ingested"
+        )
+        failed_folder = os.environ.get(
+            "IMAP_FAILED_FOLDER", "Invaluable/Not Ingested"
+        )
+        mailbox.select(source_folder, readonly=False)
         criteria = "UNSEEN"
         if search.get("senders"):
             senders = search["senders"]
@@ -285,43 +436,60 @@ def fetch(search: dict) -> list[Listing]:
             criteria = f"(UNSEEN {sender_query})"
         _, data = mailbox.search(None, criteria)
         listings = []
+        moved_count = 0
         for message_id in data[0].split():
             _, raw = mailbox.fetch(message_id, "(RFC822)")
-            mailbox.store(message_id, "+FLAGS", "(\\Seen)")
-            message = email.message_from_bytes(raw[0][1])
-            sender = parseaddr(message.get("From", ""))[1].lower()
-            if search.get("sender_domains") and not any(
-                sender.endswith("@" + domain.lower())
-                or ("@" + domain.lower() + ".") in sender
-                for domain in search["sender_domains"]
-            ):
-                continue
-            if search.get("subject_contains") and not any(
-                term.lower() in _text(message.get("Subject")).lower()
-                for term in search["subject_contains"]
-            ):
-                continue
-            for candidate in parse_message(message, search):
-                if _listing_key(candidate.url) in existing_urls:
-                    candidate.raw_data["enrichment_status"] = "skipped_existing"
-                    candidate.raw_data["enrichment_reason"] = "URL already exists in listings database"
-                    listings.append(candidate)
-                    continue
-                enriched = enrich_with_retry(
-                    candidate, provider=search.get("enrichment_provider", "zenrows")
-                )
-                enriched.raw_data["email_subject"] = candidate.raw_data.get(
-                    "email_subject", ""
-                )
-                if content_exclusion(
-                    {"title": enriched.title, "description": enriched.description}, search
+            destination = failed_folder
+            try:
+                message = email.message_from_bytes(raw[0][1])
+                sender = parseaddr(message.get("From", ""))[1].lower()
+                if search.get("sender_domains") and not any(
+                    sender.endswith("@" + domain.lower())
+                    or ("@" + domain.lower() + ".") in sender
+                    for domain in search["sender_domains"]
                 ):
-                    continue
-                amount, currency = parse_price(enriched.price, enriched.currency)
-                enriched.price = amount
-                enriched.currency = currency
-                enriched.price_usd = to_usd(amount, currency)
-                listings.append(enriched)
+                    candidates = []
+                elif search.get("subject_contains") and not any(
+                    term.lower() in _text(message.get("Subject")).lower()
+                    for term in search["subject_contains"]
+                ):
+                    candidates = []
+                else:
+                    if _is_catalog_email(message):
+                        candidates = fetch_catalog_email(message, search)
+                    else:
+                        candidates = parse_message(message, search)
+                message_listings = []
+                for candidate in candidates:
+                    if _listing_key(candidate.url) in existing_urls:
+                        candidate.raw_data["enrichment_status"] = "skipped_existing"
+                        candidate.raw_data["enrichment_reason"] = "URL already exists in listings database"
+                        message_listings.append(candidate)
+                        continue
+                    enriched = enrich_with_retry(
+                        candidate, provider=search.get("enrichment_provider", "zenrows")
+                    )
+                    enriched.raw_data["email_subject"] = candidate.raw_data.get(
+                        "email_subject", ""
+                    )
+                    if content_exclusion(
+                        {"title": enriched.title, "description": enriched.description}, search
+                    ):
+                        continue
+                    amount, currency = parse_price(enriched.price, enriched.currency)
+                    enriched.price = amount
+                    enriched.currency = currency
+                    enriched.price_usd = to_usd(amount, currency)
+                    message_listings.append(enriched)
+                listings.extend(message_listings)
+                if message_listings:
+                    destination = ingested_folder
+                mailbox.store(message_id, "+FLAGS", "(\\Seen)")
+            except Exception as error:
+                print(f"invaluable email processing failed: {error}")
+            if destination != source_folder:
+                _move_message(mailbox, message_id, destination)
+            moved_count += 1
         statuses = {}
         for item in listings:
             status = item.raw_data.get("enrichment_status", "unknown")
@@ -334,8 +502,16 @@ def fetch(search: dict) -> list[Listing]:
                     f"invaluable enrichment failed: url={item.url} attempts={item.raw_data.get('enrichment_attempts')} errors={item.raw_data.get('enrichment_retry_errors')}"
                 )
         print(f"invaluable enrichment: {statuses}")
+        print(
+            f"invaluable email folders: moved={moved_count} "
+            f"ingested={ingested_folder!r} failed={failed_folder!r}"
+        )
         return listings
     finally:
+        try:
+            mailbox.expunge()
+        except Exception:
+            pass
         try:
             mailbox.logout()
         except Exception:

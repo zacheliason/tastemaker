@@ -155,6 +155,9 @@ def main() -> None:
                 effective_search["exclude_content"] = settings["exclude_content"]
             if settings.get("enrichment_provider"):
                 effective_search["enrichment_provider"] = settings["enrichment_provider"]
+            for key in ("catalog_categories", "catalog_max_pages"):
+                if key in settings:
+                    effective_search[key] = settings[key]
             if "max_price_usd" in settings:
                 effective_search["max_price_usd"] = settings["max_price_usd"]
             items = fetcher(effective_search)

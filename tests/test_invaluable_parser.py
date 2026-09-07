@@ -1,7 +1,18 @@
 from email.message import EmailMessage
 from datetime import timezone
 
-from listing_agent.invaluable import _date, _listing_key, enrich_with_retry, parse_lot_page, parse_message
+from listing_agent.invaluable import (
+    _date,
+    _catalog_available_categories,
+    _catalog_url,
+    _is_catalog_email,
+    _listing_key,
+    _move_message,
+    enrich_with_retry,
+    parse_catalog_page,
+    parse_lot_page,
+    parse_message,
+)
 from listing_agent.models import Listing
 
 
@@ -13,6 +24,33 @@ def test_parse_message_extracts_listing_fields():
     assert items[0].title == "Marc Chagall woodblock print"
     assert str(items[0].price) == "250.00"
     assert items[0].image_urls == ["https://example.test/image.jpg"]
+
+
+def test_catalog_email_is_detected_and_catalog_pages_are_category_driven():
+    message = EmailMessage()
+    message["Subject"] = "New auctions from Sloans & Kenyon and Montgomery Auction posted"
+    message.set_content(
+        '<a href="https://click.example/catalog" title="view catatlog">'
+        "September Estate Catalogue Auction | View catalog</a>",
+        subtype="html",
+    )
+    assert _is_catalog_email(message)
+    assert _catalog_available_categories(
+        '<label>Fine Art12</label><input type="checkbox" aria-label="Furniture checkbox">',
+        ["Fine Art", "Furniture", "Men\'s Jewelry"],
+    ) == ["Fine Art", "Furniture"]
+    assert "supercategoryName=Fine+Art" in _catalog_url(
+        "https://www.invaluable.com/catalog/example", "Fine Art", 2
+    )
+
+
+def test_parse_catalog_page_marks_lots_local():
+    html = '''<div><a href="https://www.invaluable.com/auction-lot/example-c-abc123">
+      <img src="https://example.test/item.jpg">Fine Art Example</a><span>Est: $100 - $200</span></div>'''
+    items = parse_catalog_page(html, {"id": "catalog", "email_subject": "New auctions"})
+    assert len(items) == 1
+    assert items[0].raw_data["local"] is True
+    assert items[0].title == "Fine Art Example"
 
 
 def test_parse_message_excludes_configured_scraper_content():
@@ -83,6 +121,32 @@ def test_listing_key_matches_full_and_canonical_invaluable_slugs():
     email_url = "https://www.invaluable.com/auction-lot/Handsome-French-Napoleon-III-Ebony-Marble-Dial-344-c-5C250534A6"
     canonical_url = "https://www.invaluable.com/auction-lot/handsome-french-napoleon-iii-ebony-marble-dial-wa-344-c-5c250534a6"
     assert _listing_key(email_url) == _listing_key(canonical_url)
+
+
+def test_move_message_copies_and_marks_source_message_deleted():
+    class Mailbox:
+        def __init__(self):
+            self.calls = []
+
+        def create(self, folder):
+            self.calls.append(("create", folder))
+            return "OK", [b"created"]
+
+        def copy(self, message_id, folder):
+            self.calls.append(("copy", message_id, folder))
+            return "OK", [b"copied"]
+
+        def store(self, message_id, operation, flags):
+            self.calls.append(("store", message_id, operation, flags))
+            return "OK", [b"deleted"]
+
+    mailbox = Mailbox()
+    _move_message(mailbox, b"7", "Invaluable/Ingested")
+    assert mailbox.calls == [
+        ("create", "Invaluable/Ingested"),
+        ("copy", b"7", "Invaluable/Ingested"),
+        ("store", b"7", "+FLAGS", "(\\Deleted)"),
+    ]
 
 
 def test_date_parses_iso8601_and_normalizes_naive_values():

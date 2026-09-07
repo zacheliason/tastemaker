@@ -29,6 +29,8 @@ alter table listings add column if not exists filter_reason text;
 alter table listings add column if not exists filtered_at timestamptz;
 alter table listings add column if not exists sale_end_at timestamptz;
 
+-- Source-specific flags such as local-auction provenance remain in raw_data.
+
 create table if not exists taste_references (
   id bigserial primary key,
   category text not null,

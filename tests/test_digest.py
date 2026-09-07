@@ -254,7 +254,7 @@ def test_fetch_rows_only_includes_taste_filtered_items():
         def fetchall(self):
             return [(
                 "ebay", "disliked", "Disliked listing", "10.00", "USD", "10.00", None,
-                "https://example.test/disliked", [], None, "passed", None, "Relevant", True,
+                "https://example.test/disliked", [], None, {}, "passed", None, "Relevant", True,
                 "art", "dislike", "Not a taste match",
             )]
 

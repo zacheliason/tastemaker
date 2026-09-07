@@ -154,10 +154,7 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
   <tr><td class="summary-cell" style="padding:18px 24px;border-bottom:1px solid #dce6e1"><p style="margin:0;color:#55706b;font-size:10px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase">{html.escape(summary)}</p></td></tr>
 </table>''']
     for (section, source), items in sorted(grouped.items(), key=lambda item: (item[0][0] != "Passed", item[0][1])):
-        text.extend([source.title(), "=" * len(source)])
         section_color = "#557c1d" if section == "Passed" else "#a6534c"
-        blocks.append(f'''<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#f7f5ee;border-left:1px solid #dce6e1;border-right:1px solid #dce6e1">
- <tr><td class="section-cell" style="padding:28px 24px 13px"><p style="margin:0;color:#a6b1ab;font-size:10px;font-weight:700;letter-spacing:2px">SOURCE / {html.escape(source.title()).upper()}</p></td></tr></table>''')
         for row in sorted(items, key=_usd_sort_key):
             filtered = section == "Filtered"
             reason = row.get("taste_reason") or row.get("filter_reason") or row.get("title_reason") or "Matched configured search"
@@ -178,6 +175,8 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
             card_background = "#ffffff"
             card_border = "#c77983" if filtered else "#cbdbe5"
             filtered_label = '<p style="margin:0 0 10px;color:#a14d58;font-size:10px;font-weight:700;letter-spacing:1.5px">FILTERED</p>' if filtered else ""
+            source_label = f'<span style="display:inline-block;margin:0 6px 10px 0;padding:4px 8px;background:#e8eeea;border:1px solid #cbdbe5;border-radius:999px;color:#55706b;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">{html.escape(source)}</span>'
+            local_label = '<span style="display:inline-block;margin:0 0 10px;padding:4px 7px;background:#d7ed62;color:#182b2b;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">LOCAL</span>' if row.get("local") else ""
             translated_from, _ = _description_parts(row.get("description"))
             description_markup = "" if filtered else _description_html(row.get("description"))
             translation_label = f'<span style="display:block;margin:0 0 4px;color:#a6534c;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase">Translated from {html.escape(translated_from)}</span>' if translated_from else ""
@@ -186,7 +185,7 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
             blocks.append(f'''<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#f7f5ee;border-left:1px solid #dce6e1;border-right:1px solid #dce6e1">
  <tr><td style="padding:8px 12px 20px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:{card_background};border:1px solid {card_border}">
  <tr><td class="listing-media" width="42%" valign="top" style="padding:0;background:#e8eeea">{image_html}</td><td class="listing-copy" width="58%" valign="top" style="padding:23px 25px 21px">
-   {filtered_label}<p style="margin:0 0 9px;color:{section_color};font-size:10px;font-weight:700;letter-spacing:1.7px;text-transform:uppercase">{verdict} / EDIT VERDICT</p><h3 style="margin:0 0 10px;font-family:Georgia,'Times New Roman',serif;font-size:23px;line-height:1.1;font-weight:400;letter-spacing:-.35px"><a style="color:#182b2b;text-decoration:none" href="{html.escape(row['url'], quote=True)}">{html.escape(row['title'])}</a></h3>
+   {filtered_label}{source_label}{local_label}<p style="margin:0 0 9px;color:{section_color};font-size:10px;font-weight:700;letter-spacing:1.7px;text-transform:uppercase">{verdict} / EDIT VERDICT</p><h3 style="margin:0 0 10px;font-family:Georgia,'Times New Roman',serif;font-size:23px;line-height:1.1;font-weight:400;letter-spacing:-.35px"><a style="color:#182b2b;text-decoration:none" href="{html.escape(row['url'], quote=True)}">{html.escape(row['title'])}</a></h3>
    <p style="margin:0 0 5px;color:#557c1d;font-size:17px;font-weight:700;letter-spacing:-.15px">{html.escape(_price(row['price'], row['currency'], row['price_usd']))}</p>
    {f'<p style="margin:0 0 15px;color:#7b8984;font-size:11px">{html.escape(remaining)}</p>' if remaining else '<div style="height:15px"></div>'}
     <p style="margin:0 0 14px;color:#71807a;font-size:11px;line-height:1.55">Category: <strong>{html.escape(category)}</strong></p>
@@ -199,9 +198,16 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
     if efficiency:
         text.extend(["", "Pipeline pulse (last 5 days):"])
         for day in efficiency:
-            text.append(f"{day['date']}: feedback {day['feedback']}, embedded {day['embedded']}, listings {day['listings']}, judged {day['judged']}")
+            text.append(
+                f"{day['date']}: like {day['like']}, dislike {day['dislike']}, "
+                f"discrete filter failures {day['discrete_filter_failures']}"
+            )
         blocks.append('<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#edf4f8;border:1px solid #dce6e1"><tr><td style="padding:24px"><p style="margin:0 0 14px;color:#182b2b;font-family:Georgia,serif;font-size:22px">Pipeline pulse</p><p style="margin:0 0 14px;color:#55706b;font-size:11px">Five-day activity, so you can see what the daily edit is processing.</p>')
-        metric_labels = (("feedback emails", "feedback"), ("taste references embedded", "embedded"), ("listings ingested", "listings"), ("items judged", "judged"))
+        metric_labels = (
+            ("like", "like"),
+            ("dislike", "dislike"),
+            ("discrete filter failures", "discrete_filter_failures"),
+        )
         if efficiency_image_source:
             blocks.append(f'<img src="{html.escape(efficiency_image_source, quote=True)}" alt="Five-day pipeline activity chart" width="760" style="display:block;width:100%;height:auto;margin:0 0 12px">')
         for label, key in metric_labels:
@@ -224,15 +230,16 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
 
 def fetch_rows(conn, start: datetime, include_filtered: bool = False) -> list[dict]:
     rows = conn.execute("""select l.source, l.external_id, l.title, l.price, l.currency, l.price_usd,
-        l.description, l.url, l.image_urls, l.sale_end_at, l.filter_status, l.filter_reason,
+        l.description, l.url, l.image_urls, l.sale_end_at, l.raw_data, l.filter_status, l.filter_reason,
         j.title_reason, j.title_pass, j.category, j.taste_verdict, j.taste_reason
         from listings l left join ai_judgments j on j.listing_id = l.id
         where l.fetched_at >= %s and l.filter_status = 'passed' and j.title_pass = true and
           (j.taste_verdict in ('like', 'uncertain') or (%s and l.filter_status = 'passed' and j.taste_verdict = 'dislike'))
         order by case when j.taste_verdict = 'dislike' then 1 else 0 end, l.source, l.fetched_at desc""", (start, include_filtered)).fetchall()
-    keys = ("source", "external_id", "title", "price", "currency", "price_usd", "description", "url", "image_urls", "sale_end_at", "filter_status", "filter_reason", "title_reason", "title_pass", "category", "taste_verdict", "taste_reason")
+    keys = ("source", "external_id", "title", "price", "currency", "price_usd", "description", "url", "image_urls", "sale_end_at", "raw_data", "filter_status", "filter_reason", "title_reason", "title_pass", "category", "taste_verdict", "taste_reason")
     output = [dict(zip(keys, row)) for row in rows]
     for row in output:
+        row["local"] = bool((row.get("raw_data") or {}).get("local"))
         row["section"] = "Filtered" if row["taste_verdict"] == "dislike" else "Passed"
     return output
 
@@ -244,13 +251,20 @@ def fetch_usage(conn, start: datetime) -> dict:
 
 def fetch_efficiency(conn, start: datetime) -> list[dict]:
     rows = conn.execute("""select day::date,
-        (select count(*) from feedback_events where processed_at::date = day::date) as feedback,
-        (select count(*) from taste_references where embedding_generated_at::date = day::date) as embedded,
-        (select count(*) from listings where fetched_at::date = day::date) as listings,
-        (select count(*) from ai_judgments where judged_at::date = day::date) as judged
+        (select count(*) from ai_judgments where judged_at::date = day::date and taste_verdict = 'like') as like_count,
+        (select count(*) from ai_judgments where judged_at::date = day::date and taste_verdict = 'dislike') as dislike_count,
+        (select count(*) from listings where fetched_at::date = day::date and filter_status = 'filtered') as discrete_filter_failures
         from generate_series(%s::date - interval '4 days', %s::date, interval '1 day') as day
         order by day""", (start.date(), start.date())).fetchall()
-    return [{"date": row[0], "feedback": row[1], "embedded": row[2], "listings": row[3], "judged": row[4]} for row in rows]
+    return [
+        {
+            "date": row[0],
+            "like": row[1],
+            "dislike": row[2],
+            "discrete_filter_failures": row[3],
+        }
+        for row in rows
+    ]
 
 
 def efficiency_figure(efficiency: list[dict]) -> bytes:
@@ -259,25 +273,38 @@ def efficiency_figure(efficiency: list[dict]) -> bytes:
 
     labels = [str(day["date"])[5:] for day in efficiency]
     series = (
-        ("Feedback", "feedback", "#a6534c"),
-        ("Embedded", "embedded", "#557c1d"),
-        ("Listings", "listings", "#55706b"),
-        ("Judged", "judged", "#b49a43"),
+        ("Like", "like", "#557c1d"),
+        ("Dislike", "dislike", "#a6534c"),
+        ("Discrete filter failures", "discrete_filter_failures", "#55706b"),
     )
-    figure, axes = plt.subplots(2, 2, figsize=(10, 4.2), dpi=160, facecolor="#edf4f8")
-    figure.subplots_adjust(left=0.07, right=0.98, top=0.84, bottom=0.18, wspace=0.22, hspace=0.55)
+    figure, axis = plt.subplots(figsize=(10, 4.2), dpi=160, facecolor="#edf4f8")
+    figure.subplots_adjust(left=0.08, right=0.98, top=0.84, bottom=0.2)
     figure.suptitle("PIPELINE PULSE / LAST 5 DAYS", x=0.07, ha="left", color="#182b2b", fontsize=11, fontweight="bold")
-    for axis, (title, key, color) in zip(axes.flat, series):
+    positions = list(range(len(labels)))
+    bar_width = 0.24
+    for index, (title, key, color) in enumerate(series):
         values = [int(day.get(key, 0)) for day in efficiency]
-        axis.plot(labels, values, color=color, linewidth=2.4, marker="o", markersize=4, markerfacecolor="#d7ed62", markeredgewidth=0)
-        axis.fill_between(range(len(labels)), values, color=color, alpha=0.08)
-        axis.set_title(title, loc="left", color="#55706b", fontsize=9, fontweight="bold", pad=7)
-        axis.set_ylim(bottom=0)
-        axis.grid(axis="y", color="#dce6e1", linewidth=0.8)
-        axis.set_axisbelow(True)
-        axis.tick_params(axis="both", colors="#8a9993", labelsize=8, length=0)
-        axis.spines[:].set_visible(False)
-        axis.set_yticks(sorted(set([0, max(values)])))
+        axis.bar(
+            [position + (index - 1) * bar_width for position in positions],
+            values,
+            width=bar_width,
+            color=color,
+            label=title,
+        )
+    axis.set_xticks(positions, labels)
+    axis.set_ylim(bottom=0)
+    axis.grid(axis="y", color="#dce6e1", linewidth=0.8)
+    axis.set_axisbelow(True)
+    axis.tick_params(axis="both", colors="#8a9993", labelsize=8, length=0)
+    axis.spines[:].set_visible(False)
+    axis.legend(
+        loc="upper left",
+        bbox_to_anchor=(0, 1.02),
+        ncol=3,
+        frameon=False,
+        fontsize=8,
+        labelcolor="#55706b",
+    )
     output = BytesIO()
     figure.savefig(output, format="png", facecolor=figure.get_facecolor(), bbox_inches="tight")
     plt.close(figure)

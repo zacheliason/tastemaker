@@ -36,6 +36,12 @@
       "enabled": true,
       "adapter": "invaluable",
       "enrichment_provider": "zenrows",
+      "catalog_categories": [
+        "Fine Art",
+        "Furniture",
+        "Men's Jewelry"
+      ],
+      "catalog_max_pages": 100,
       "exclude_content": [
         "Google cloud platform",
         "Zenrows"
