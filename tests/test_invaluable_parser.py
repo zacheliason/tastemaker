@@ -6,6 +6,7 @@ from listing_agent.invaluable import (
     _catalog_available_categories,
     _catalog_url,
     _is_catalog_email,
+    _imap_folder,
     _listing_key,
     _move_message,
     enrich_with_retry,
@@ -28,7 +29,7 @@ def test_parse_message_extracts_listing_fields():
 
 def test_catalog_email_is_detected_and_catalog_pages_are_category_driven():
     message = EmailMessage()
-    message["Subject"] = "New auctions from Sloans & Kenyon and Montgomery Auction posted"
+    message["Subject"] = "New Sloans & Kenyon auction added"
     message.set_content(
         '<a href="https://click.example/catalog" title="view catatlog">'
         "September Estate Catalogue Auction | View catalog</a>",
@@ -42,6 +43,16 @@ def test_catalog_email_is_detected_and_catalog_pages_are_category_driven():
     assert "supercategoryName=Fine+Art" in _catalog_url(
         "https://www.invaluable.com/catalog/example", "Fine Art", 2
     )
+
+
+def test_parse_message_ignores_unqualified_salesforce_tracking_links():
+    message = EmailMessage()
+    message.set_content(
+        '<a href="https://click.e.invaluable.com/?qs=lot">'
+        '<img alt="catalog lot" src="https://image.example/lot.jpg"></a>',
+        subtype="html",
+    )
+    assert parse_message(message, {"id": "test"}) == []
 
 
 def test_parse_catalog_page_marks_lots_local():
@@ -147,6 +158,35 @@ def test_move_message_copies_and_marks_source_message_deleted():
         ("copy", b"7", "Invaluable/Ingested"),
         ("store", b"7", "+FLAGS", "(\\Deleted)"),
     ]
+
+
+def test_move_message_does_nothing_for_disabled_folder():
+    class Mailbox:
+        def __getattr__(self, name):
+            raise AssertionError(f"unexpected mailbox call: {name}")
+
+    _move_message(Mailbox(), b"7", "")
+
+
+def test_imap_folder_defaults_when_github_secret_is_empty(monkeypatch):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("IMAP_INGESTED_FOLDER", "")
+    assert _imap_folder("IMAP_INGESTED_FOLDER", "Invaluable/Ingested") == (
+        "Invaluable/Ingested"
+    )
+
+
+def test_imap_folder_defaults_when_variable_is_unset(monkeypatch):
+    monkeypatch.delenv("IMAP_FAILED_FOLDER", raising=False)
+    assert _imap_folder("IMAP_FAILED_FOLDER", "Invaluable/Not Ingested") == (
+        "Invaluable/Not Ingested"
+    )
+
+
+def test_imap_folder_empty_value_still_disables_move_outside_github(monkeypatch):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setenv("IMAP_FAILED_FOLDER", "")
+    assert _imap_folder("IMAP_FAILED_FOLDER", "Invaluable/Not Ingested") == ""
 
 
 def test_date_parses_iso8601_and_normalizes_naive_values():

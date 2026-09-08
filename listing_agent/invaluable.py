@@ -88,6 +88,14 @@ def _move_message(mailbox, message_id: bytes, folder: str) -> None:
         )
 
 
+def _imap_folder(name: str, default: str) -> str:
+    """Resolve an IMAP folder, accounting for empty GitHub secret exports."""
+    value = os.environ.get(name)
+    if value == "" and os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
+        return default
+    return default if value is None else value
+
+
 def _date(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -137,7 +145,9 @@ def _catalog_links(message: Message) -> list[str]:
 
 def _is_catalog_email(message: Message) -> bool:
     subject = _text(message.get("Subject")).lower()
-    return "new auction" in subject and bool(_catalog_links(message))
+    return bool(re.search(r"\bnew\b.*\bauction\b", subject)) and bool(
+        _catalog_links(message)
+    )
 
 
 def _resolve_catalog_url(url: str) -> str:
@@ -263,6 +273,13 @@ def parse_message(message: Message, search: dict) -> list[Listing]:
         if not link:
             continue
         item_id = link.get("itemid") or (image.get("itemid") if image else None)
+        parsed_href = urlsplit(link.get("href", ""))
+        if (
+            parsed_href.netloc.lower() == "click.e.invaluable.com"
+            and not item_id
+        ):
+            # Salesforce tracking links do not identify a lot after their query is stripped.
+            continue
         if "/tecr" in link.get("href", "") and not item_id:
             continue
         container = (image.find_parent("table") if image else None) or link.parent
@@ -422,10 +439,10 @@ def fetch(search: dict) -> list[Listing]:
     try:
         mailbox.login(env["IMAP_USERNAME"], env["IMAP_PASSWORD"])
         source_folder = os.environ.get("IMAP_FOLDER", "INBOX")
-        ingested_folder = os.environ.get(
+        ingested_folder = _imap_folder(
             "IMAP_INGESTED_FOLDER", "Invaluable/Ingested"
         )
-        failed_folder = os.environ.get(
+        failed_folder = _imap_folder(
             "IMAP_FAILED_FOLDER", "Invaluable/Not Ingested"
         )
         mailbox.select(source_folder, readonly=False)
@@ -449,16 +466,27 @@ def fetch(search: dict) -> list[Listing]:
                     for domain in search["sender_domains"]
                 ):
                     candidates = []
+                    zero_reason = "sender did not match configured sender_domains"
                 elif search.get("subject_contains") and not any(
                     term.lower() in _text(message.get("Subject")).lower()
                     for term in search["subject_contains"]
                 ):
                     candidates = []
+                    zero_reason = "subject did not match configured subject_contains"
                 else:
                     if _is_catalog_email(message):
                         candidates = fetch_catalog_email(message, search)
+                        zero_reason = "catalog link resolved but produced no catalog lots"
                     else:
                         candidates = parse_message(message, search)
+                        zero_reason = "no supported lot elements found in email HTML"
+                if not candidates:
+                    subject = _text(message.get("Subject"))
+                    print(
+                        "::error::Invaluable ingestion produced zero listings: "
+                        f"message_id={message_id.decode(errors='replace')} "
+                        f"sender={sender!r} subject={subject!r} reason={zero_reason}"
+                    )
                 message_listings = []
                 for candidate in candidates:
                     if _listing_key(candidate.url) in existing_urls:

@@ -71,6 +71,6 @@ jobs:
       - name: Apply deterministic filters
         run: python -m listing_agent.cli filter
       - name: Run AI judgments
-        run: python -m listing_agent.cli judge
+        run: python -m listing_agent.cli judge --since "$RUN_STARTED_AT"
       - name: Send digest
         run: python -m listing_agent.cli digest --since "$RUN_STARTED_AT"

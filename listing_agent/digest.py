@@ -13,12 +13,15 @@ from urllib.parse import quote
 
 import httpx
 from bs4 import BeautifulSoup, Comment
+from PIL import Image, ImageOps
 
 from .translation import translate_rows
 
 
 MAX_INLINE_ATTACHMENTS = 500
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_IMAGE_DIMENSION = 1600
+IMAGE_QUALITY = 85
 INPUT_COST_PER_MILLION = 0.20
 OUTPUT_COST_PER_MILLION = 1.20
 CACHE_READ_COST_PER_MILLION = 0.02
@@ -62,6 +65,12 @@ def _pretty_date(value: datetime) -> str:
 
 def _category_label(category: str | None) -> str:
     return (category or "Not assigned").replace("_", " ").title()
+
+
+def _source_color(source: str) -> str:
+    """Choose a stable email-safe accent without a tiny colliding palette."""
+    digest = hashlib.sha256(source.encode("utf-8")).digest()
+    return f"#{digest[:3].hex()}"
 
 
 def _description(value: str | None) -> str:
@@ -113,7 +122,7 @@ def _usage_cost(usage: dict) -> tuple[float, float, float, float]:
     return input_cost, output_cost, cache_read_cost, input_cost + output_cost + cache_read_cost
 
 
-def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient: str | None = None, usage: dict | None = None, image_sources: dict[str, str] | None = None, translation_usage: dict | None = None, efficiency: list[dict] | None = None, efficiency_image_source: str | None = None) -> tuple[str, str]:
+def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient: str | None = None, usage: dict | None = None, image_sources: dict[str, str] | None = None, translation_usage: dict | None = None, efficiency: list[dict] | None = None, efficiency_image_source: str | None = None, outcomes_image_source: str | None = None) -> tuple[str, str]:
     feedback_recipient = feedback_recipient or recipient
     grouped = {}
     for row in rows:
@@ -154,7 +163,6 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
   <tr><td class="summary-cell" style="padding:18px 24px;border-bottom:1px solid #dce6e1"><p style="margin:0;color:#55706b;font-size:10px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase">{html.escape(summary)}</p></td></tr>
 </table>''']
     for (section, source), items in sorted(grouped.items(), key=lambda item: (item[0][0] != "Passed", item[0][1])):
-        section_color = "#557c1d" if section == "Passed" else "#a6534c"
         for row in sorted(items, key=_usd_sort_key):
             filtered = section == "Filtered"
             reason = row.get("taste_reason") or row.get("filter_reason") or row.get("title_reason") or "Matched configured search"
@@ -174,18 +182,22 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
             image_html = f'<img src="{html.escape(image_source, quote=True)}" alt="Listing image" width="270" style="display:block;width:100%;max-width:270px;height:auto;max-height:250px;object-fit:cover">' if image_source else '<div style="height:110px;background:#e8eeea;color:#8ca09a;font-size:10px;letter-spacing:1.2px;text-align:center;text-transform:uppercase;line-height:110px">No image supplied</div>'
             card_background = "#ffffff"
             card_border = "#c77983" if filtered else "#cbdbe5"
-            filtered_label = '<p style="margin:0 0 10px;color:#a14d58;font-size:10px;font-weight:700;letter-spacing:1.5px">FILTERED</p>' if filtered else ""
-            source_label = f'<span style="display:inline-block;margin:0 6px 10px 0;padding:4px 8px;background:#e8eeea;border:1px solid #cbdbe5;border-radius:999px;color:#55706b;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">{html.escape(source)}</span>'
+            source_color = _source_color(source)
+            status_label = (
+                '<span style="display:inline-block;margin:0 6px 10px 0;padding:4px 8px;background:#f3ddda;border:1px solid #d7aaa4;border-radius:999px;color:#813d38;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">filtered</span>'
+                if filtered else
+                '<span style="display:inline-block;margin:0 6px 10px 0;padding:4px 8px;background:#e5efc7;border:1px solid #b9d27d;border-radius:999px;color:#38530f;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">Passed</span>'
+            )
+            source_label = f'<span style="display:inline-block;margin:0 6px 10px 0;padding:4px 8px;background:{source_color};border:1px solid {source_color};border-radius:999px;color:#f7f5ee;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">{html.escape(source)}</span>'
             local_label = '<span style="display:inline-block;margin:0 0 10px;padding:4px 7px;background:#d7ed62;color:#182b2b;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">LOCAL</span>' if row.get("local") else ""
             translated_from, _ = _description_parts(row.get("description"))
             description_markup = "" if filtered else _description_html(row.get("description"))
             translation_label = f'<span style="display:block;margin:0 0 4px;color:#a6534c;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase">Translated from {html.escape(translated_from)}</span>' if translated_from else ""
             description_html = f'<p class="listing-description" style="margin:0 0 12px;font-size:13px;line-height:1.45;color:#55706b;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden"><strong>Description</strong>{translation_label}<br>{description_markup}</p>' if description_markup else ""
-            verdict = row.get("taste_verdict", "uncertain").title()
             blocks.append(f'''<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#f7f5ee;border-left:1px solid #dce6e1;border-right:1px solid #dce6e1">
  <tr><td style="padding:8px 12px 20px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:{card_background};border:1px solid {card_border}">
  <tr><td class="listing-media" width="42%" valign="top" style="padding:0;background:#e8eeea">{image_html}</td><td class="listing-copy" width="58%" valign="top" style="padding:23px 25px 21px">
-   {filtered_label}{source_label}{local_label}<p style="margin:0 0 9px;color:{section_color};font-size:10px;font-weight:700;letter-spacing:1.7px;text-transform:uppercase">{verdict} / EDIT VERDICT</p><h3 style="margin:0 0 10px;font-family:Georgia,'Times New Roman',serif;font-size:23px;line-height:1.1;font-weight:400;letter-spacing:-.35px"><a style="color:#182b2b;text-decoration:none" href="{html.escape(row['url'], quote=True)}">{html.escape(row['title'])}</a></h3>
+    {status_label}{source_label}{local_label}<h3 style="margin:0 0 10px;font-family:Georgia,'Times New Roman',serif;font-size:23px;line-height:1.1;font-weight:400;letter-spacing:-.35px"><a style="color:#182b2b;text-decoration:none" href="{html.escape(row['url'], quote=True)}">{html.escape(row['title'])}</a></h3>
    <p style="margin:0 0 5px;color:#557c1d;font-size:17px;font-weight:700;letter-spacing:-.15px">{html.escape(_price(row['price'], row['currency'], row['price_usd']))}</p>
    {f'<p style="margin:0 0 15px;color:#7b8984;font-size:11px">{html.escape(remaining)}</p>' if remaining else '<div style="height:15px"></div>'}
     <p style="margin:0 0 14px;color:#71807a;font-size:11px;line-height:1.55">Category: <strong>{html.escape(category)}</strong></p>
@@ -209,11 +221,24 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
             ("discrete filter failures", "discrete_filter_failures"),
         )
         if efficiency_image_source:
-            blocks.append(f'<img src="{html.escape(efficiency_image_source, quote=True)}" alt="Five-day pipeline activity chart" width="760" style="display:block;width:100%;height:auto;margin:0 0 12px">')
+            blocks.append(f'''<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;clear:both;display:table;width:100%"><tr><td style="padding:0 0 12px;clear:both;display:block;width:100%"><img src="{html.escape(efficiency_image_source, quote=True)}" alt="Five-day pipeline activity chart" width="760" style="display:block;clear:both;width:100%;height:auto;margin:0"></td></tr></table>''')
         for label, key in metric_labels:
             values = [int(day.get(key, 0)) for day in efficiency]
             blocks.append(f'<p style="margin:10px 0 3px;color:#55706b;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase">{label}: {values[-1]}</p><p style="margin:2px 0;color:#8a9993;font-size:10px">{" / ".join(str(value) for value in values)}</p>')
+        outcomes = pipeline_outcomes(efficiency)
+        text.append(
+            "Pipeline outcomes: "
+            f"Passed {outcomes['passed']}, "
+            f"Failed due to discrete filters {outcomes['discrete_filter_failures']}, "
+            f"Failed by taste classifier (logistic regression) {outcomes['taste_classifier_failures']}"
+        )
         blocks.append('</td></tr></table>')
+        if outcomes_image_source:
+            blocks.append(f'''<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#edf4f8;border:1px solid #dce6e1;clear:both">
+  <tr><td style="padding:20px 24px 24px;clear:both;display:block;width:100%">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;clear:both;display:table;width:100%"><tr><td style="padding:0;clear:both;display:block;width:100%"><img src="{html.escape(outcomes_image_source, quote=True)}" alt="Pipeline outcomes for the digest window" width="760" style="display:block;clear:both;width:100%;height:auto;margin:0"></td></tr></table>
+  </td></tr>
+</table>''')
     usage = usage or {"prompt_tokens": 0, "completion_tokens": 0, "cache_read_tokens": 0}
     input_cost, output_cost, cache_read_cost, total_cost = _usage_cost(usage)
     cost_line = f"Estimated LLM cost: ${total_cost:.6f} (input ${input_cost:.6f}, output ${output_cost:.6f}, cache read ${cache_read_cost:.6f})"
@@ -249,19 +274,29 @@ def fetch_usage(conn, start: datetime) -> dict:
     return {"prompt_tokens": row[0], "completion_tokens": row[1], "total_tokens": row[2], "cache_read_tokens": row[3]}
 
 
-def fetch_efficiency(conn, start: datetime) -> list[dict]:
+def fetch_efficiency(conn, start: datetime, include_filtered: bool = False) -> list[dict]:
+    # A listing is the unit of daily pipeline activity. Judgments can be
+    # re-run for older listings when classifier inputs change, so judged_at is
+    # not a valid activity date and would inflate this trend. The lower bound
+    # also matters on the first day: the pulse must describe this digest
+    # window, not the whole calendar day before Since.
     rows = conn.execute("""select day::date,
-        (select count(*) from ai_judgments where judged_at::date = day::date and taste_verdict = 'like') as like_count,
-        (select count(*) from ai_judgments where judged_at::date = day::date and taste_verdict = 'dislike') as dislike_count,
-        (select count(*) from listings where fetched_at::date = day::date and filter_status = 'filtered') as discrete_filter_failures
+        count(distinct l.id) filter (where l.filter_status = 'passed' and j.title_pass = true and j.taste_verdict in ('like', 'uncertain')) as like_count,
+         count(distinct l.id) filter (where l.filter_status = 'passed' and j.title_pass = true and j.taste_verdict = 'dislike' and %s) as dislike_count,
+         count(distinct l.id) filter (where l.filter_status = 'passed' and j.title_pass = true and j.taste_verdict = 'dislike') as taste_classifier_failure_count,
+         count(distinct l.id) filter (where l.filter_status = 'filtered') as discrete_filter_failures
         from generate_series(%s::date - interval '4 days', %s::date, interval '1 day') as day
-        order by day""", (start.date(), start.date())).fetchall()
+        left join listings l on l.fetched_at >= greatest(day, %s) and l.fetched_at < day + interval '1 day'
+        left join ai_judgments j on j.listing_id = l.id
+        group by day
+        order by day""", (include_filtered, start.date(), start.date(), start)).fetchall()
     return [
         {
             "date": row[0],
             "like": row[1],
             "dislike": row[2],
             "discrete_filter_failures": row[3],
+            "taste_classifier_failures": row[4],
         }
         for row in rows
     ]
@@ -311,6 +346,57 @@ def efficiency_figure(efficiency: list[dict]) -> bytes:
     return output.getvalue()
 
 
+def pipeline_outcomes(efficiency: list[dict]) -> dict[str, int]:
+    """Aggregate the pulse window into the pipeline's persisted outcome semantics."""
+    return {
+        "passed": sum(int(day.get("like", 0)) for day in efficiency),
+        "discrete_filter_failures": sum(int(day.get("discrete_filter_failures", 0)) for day in efficiency),
+        "taste_classifier_failures": sum(int(day.get("taste_classifier_failures", 0)) for day in efficiency),
+    }
+
+
+def outcomes_figure(efficiency: list[dict]) -> bytes:
+    """Render the pulse-window outcomes as an email-safe PNG attachment."""
+    import matplotlib.pyplot as plt
+
+    outcomes = pipeline_outcomes(efficiency)
+    labels = (
+        "Passed",
+        "Failed due to discrete filters",
+        "Failed by taste classifier (logistic regression)",
+    )
+    values = [outcomes["passed"], outcomes["discrete_filter_failures"], outcomes["taste_classifier_failures"]]
+    colors = ("#557c1d", "#55706b", "#a6534c")
+    figure, axis = plt.subplots(figsize=(7.6, 4.6), dpi=160, facecolor="#edf4f8")
+    figure.subplots_adjust(left=0.02, right=0.98, top=0.82, bottom=0.04)
+    if sum(values):
+        axis.pie(values, colors=colors, startangle=90, counterclock=False, wedgeprops={"width": 0.42, "edgecolor": "#edf4f8"})
+    else:
+        axis.text(0.5, 0.5, "No outcomes recorded", ha="center", va="center", color="#55706b", fontsize=10)
+    axis.set_title("PIPELINE OUTCOMES / DIGEST WINDOW", loc="left", color="#182b2b", fontsize=11, fontweight="bold", pad=18)
+    legend_labels = [f"{label}: {value}" for label, value in zip(labels, values)]
+    axis.legend(legend_labels, loc="center left", bbox_to_anchor=(0.98, 0.5), frameon=False, fontsize=8, labelcolor="#55706b")
+    output = BytesIO()
+    figure.savefig(output, format="png", facecolor=figure.get_facecolor(), bbox_inches="tight")
+    plt.close(figure)
+    return output.getvalue()
+
+
+def _normalize_attachment_image(data: bytes) -> bytes | None:
+    """Bound inline image dimensions and size without retaining the source format."""
+    try:
+        with Image.open(BytesIO(data)) as image:
+            if getattr(image, "is_animated", False):
+                image.seek(0)
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            image.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION), Image.Resampling.LANCZOS)
+            output = BytesIO()
+            image.save(output, format="JPEG", quality=IMAGE_QUALITY, optimize=True, progressive=True)
+            return output.getvalue()
+    except Exception:
+        return None
+
+
 def download_images(rows: list[dict]) -> tuple[dict[str, str], list[tuple[str, bytes, str, str]]]:
     """Fetch images only in memory for this message; do not retain marketplace images."""
     sources, attachments = {}, []
@@ -329,10 +415,12 @@ def download_images(rows: list[dict]) -> tuple[dict[str, str], list[tuple[str, b
                     or (content_length and int(content_length) > MAX_IMAGE_BYTES)
                     or len(response.content) > MAX_IMAGE_BYTES):
                 continue
-            maintype, subtype = content_type.split("/", 1)
+            normalized = _normalize_attachment_image(response.content)
+            if normalized is None:
+                continue
             cid = f"listing-{hashlib.sha256(row['external_id'].encode()).hexdigest()[:16]}@digest"
             sources[row["external_id"]] = f"cid:{cid}"
-            attachments.append((cid, response.content, maintype, subtype))
+            attachments.append((cid, normalized, "image", "jpeg"))
         except (httpx.HTTPError, ValueError):
             continue
     return sources, attachments
@@ -368,10 +456,12 @@ def deliver(conn, start: datetime, recipient: str, dry_run: bool = False, includ
     image_sources, attachments = download_images(rows) if not dry_run else ({}, [])
     translation_usage = {}
     translate_rows(conn, rows, translation_usage)
-    efficiency = fetch_efficiency(conn, start)
+    efficiency = fetch_efficiency(conn, start, include_filtered)
     efficiency_source = "cid:efficiency-pulse"
-    figure = efficiency_figure(efficiency) if efficiency else None
-    text, markup = render(rows, recipient, start, feedback_recipient, fetch_usage(conn, start), image_sources, translation_usage, efficiency, efficiency_source if figure else None)
+    figure = _normalize_attachment_image(efficiency_figure(efficiency)) if efficiency else None
+    outcomes_source = "cid:pipeline-outcomes"
+    outcomes = _normalize_attachment_image(outcomes_figure(efficiency)) if efficiency else None
+    text, markup = render(rows, recipient, start, feedback_recipient, fetch_usage(conn, start), image_sources, translation_usage, efficiency, efficiency_source if figure else None, outcomes_source if outcomes else None)
     message = EmailMessage()
     message["Subject"] = f"Tastemaker Digest: {len(rows)} matches"
     message["From"] = os.environ.get("DIGEST_FROM") or os.environ.get("SMTP_USERNAME") or os.environ.get("IMAP_USERNAME", "listing-agent@localhost")
@@ -384,7 +474,10 @@ def deliver(conn, start: datetime, recipient: str, dry_run: bool = False, includ
             html_part.add_related(data, maintype=maintype, subtype=subtype, cid=cid, disposition="inline")
     if figure:
         html_part = message.get_payload()[-1]
-        html_part.add_related(figure, maintype="image", subtype="png", cid="efficiency-pulse", disposition="inline")
+        html_part.add_related(figure, maintype="image", subtype="jpeg", cid="efficiency-pulse", disposition="inline")
+    if outcomes:
+        html_part = message.get_payload()[-1]
+        html_part.add_related(outcomes, maintype="image", subtype="jpeg", cid="pipeline-outcomes", disposition="inline")
     if not dry_run:
         host = os.environ.get("SMTP_HOST") or ("smtp.gmail.com" if os.environ.get("IMAP_HOST") == "imap.gmail.com" else "")
         username = os.environ.get("SMTP_USERNAME") or os.environ.get("IMAP_USERNAME", "")

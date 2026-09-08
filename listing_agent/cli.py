@@ -99,8 +99,9 @@ def main() -> None:
         if not os.environ.get("DATABASE_URL"):
             parser.error("judge requires DATABASE_URL")
         ai_config = json.loads(Path(args.ai_config).read_text())
+        since = datetime.fromisoformat(args.since) if args.since else None
         with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
-            count = run_with_config(conn, config, ai_config, args.source)
+            count = run_with_config(conn, config, ai_config, args.source, since)
             print(f"AI judgments upserted: {count}")
         return
     if args.command == "digest":

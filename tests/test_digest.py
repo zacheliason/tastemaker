@@ -1,6 +1,21 @@
 from datetime import datetime, timedelta, timezone
 
-from listing_agent.digest import _price, _remaining, deliver, fetch_rows, render
+from io import BytesIO
+
+from PIL import Image
+
+from listing_agent.digest import (
+    _normalize_attachment_image,
+    _price,
+    _remaining,
+    _source_color,
+    deliver,
+    fetch_efficiency,
+    fetch_rows,
+    outcomes_figure,
+    pipeline_outcomes,
+    render,
+)
 from listing_agent.translation import translate_rows
 
 
@@ -22,6 +37,88 @@ def test_render_includes_llm_cost_footer():
     assert expected in text
     assert expected in markup
     assert "tokens" not in text
+
+
+def test_fetch_efficiency_uses_listing_fetch_date_not_judgment_date():
+    class Result:
+        def fetchall(self):
+            return [(datetime(2026, 8, 28).date(), 14, 3, 7, 3)]
+
+    class Connection:
+        def __init__(self):
+            self.query = None
+            self.params = None
+
+        def execute(self, query, params):
+            self.query = query
+            self.params = params
+            return Result()
+
+    conn = Connection()
+    start = datetime(2026, 8, 28, 15, 53, tzinfo=timezone.utc)
+    efficiency = fetch_efficiency(conn, start, include_filtered=True)
+
+    assert efficiency == [{
+        "date": datetime(2026, 8, 28).date(),
+        "like": 14,
+        "dislike": 3,
+        "discrete_filter_failures": 7,
+        "taste_classifier_failures": 3,
+    }]
+    assert "l.fetched_at >= greatest(day, %s)" in conn.query
+    assert "l.filter_status = 'passed'" in conn.query
+    assert "j.title_pass = true" in conn.query
+    assert "j.taste_verdict in ('like', 'uncertain')" in conn.query
+    assert "count(distinct l.id)" in conn.query
+    assert "judged_at::date" not in conn.query
+    assert conn.params == (True, start.date(), start.date(), start)
+
+
+def test_pipeline_outcomes_aggregate_digest_window_semantics():
+    efficiency = [
+        {"like": 4, "discrete_filter_failures": 2, "taste_classifier_failures": 1},
+        {"like": 6, "discrete_filter_failures": 3, "taste_classifier_failures": 2},
+    ]
+
+    assert pipeline_outcomes(efficiency) == {
+        "passed": 10,
+        "discrete_filter_failures": 5,
+        "taste_classifier_failures": 3,
+    }
+
+
+def test_pipeline_outcomes_chart_is_normalized_and_rendered_at_end_of_pulse():
+    efficiency = [{"date": datetime(2026, 8, 28).date(), "like": 4, "dislike": 1, "discrete_filter_failures": 2, "taste_classifier_failures": 1}]
+    normalized = _normalize_attachment_image(outcomes_figure(efficiency))
+    assert normalized is not None
+    with Image.open(BytesIO(normalized)) as image:
+        assert image.format == "JPEG"
+
+    _, markup = render(
+        [], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc),
+        efficiency=efficiency,
+        efficiency_image_source="cid:efficiency-pulse",
+        outcomes_image_source="cid:pipeline-outcomes",
+    )
+    pulse_image = markup.index('src="cid:efficiency-pulse"')
+    outcomes_image = markup.index('src="cid:pipeline-outcomes"')
+    pulse_block_end = markup.rindex('</td></tr></table>', pulse_image, outcomes_image)
+    assert outcomes_image > pulse_block_end
+    assert 'width="100%"' in markup[pulse_image - 250:pulse_image]
+    assert 'clear:both' in markup[pulse_image - 250:pulse_image]
+    assert 'width="100%"' in markup[outcomes_image - 250:outcomes_image]
+    assert 'clear:both' in markup[outcomes_image - 250:outcomes_image]
+    assert "Failed by taste classifier (logistic regression) 1" in "".join(render(
+        [], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc), efficiency=efficiency
+    )[0])
+
+
+def test_source_colors_are_stable_and_not_limited_to_eight_buckets():
+    sources = [f"source-{index}" for index in range(20)]
+    colors = [_source_color(source) for source in sources]
+
+    assert colors == [_source_color(source) for source in sources]
+    assert len(set(colors)) == len(colors)
 
 
 def test_render_includes_listing_description_and_new_title():
@@ -104,7 +201,9 @@ def test_download_images_keeps_content_in_memory(monkeypatch):
 
     class Response:
         headers = {"content-type": "image/jpeg"}
-        content = b"jpeg-bytes"
+        output = BytesIO()
+        Image.new("RGB", (2400, 1200), "red").save(output, format="JPEG")
+        content = output.getvalue()
 
         def raise_for_status(self):
             return None
@@ -112,7 +211,25 @@ def test_download_images_keeps_content_in_memory(monkeypatch):
     monkeypatch.setattr("listing_agent.digest.httpx.get", lambda *args, **kwargs: Response())
     sources, attachments = download_images([{"external_id": "abc", "image_urls": ["https://example.test/image.jpg"]}])
     assert sources["abc"].startswith("cid:listing-")
-    assert attachments[0][1] == b"jpeg-bytes"
+    assert attachments[0][2:] == ("image", "jpeg")
+    with Image.open(BytesIO(attachments[0][1])) as image:
+        assert image.size == (1600, 800)
+
+
+def test_download_images_skips_invalid_image(monkeypatch):
+    from listing_agent.digest import download_images
+
+    class Response:
+        headers = {"content-type": "image/jpeg"}
+        content = b"not-an-image"
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr("listing_agent.digest.httpx.get", lambda *args, **kwargs: Response())
+    sources, attachments = download_images([{"external_id": "abc", "image_urls": ["https://example.test/image.jpg"]}])
+    assert sources == {}
+    assert attachments == []
 
 
 def test_download_images_caps_inline_attachments(monkeypatch):
@@ -120,7 +237,9 @@ def test_download_images_caps_inline_attachments(monkeypatch):
 
     class Response:
         headers = {"content-type": "image/jpeg"}
-        content = b"jpeg-bytes"
+        output = BytesIO()
+        Image.new("RGB", (1, 1), "red").save(output, format="JPEG")
+        content = output.getvalue()
 
         def raise_for_status(self):
             return None
@@ -143,6 +262,42 @@ def test_download_images_caps_inline_attachments(monkeypatch):
     assert len(attachments) == MAX_INLINE_ATTACHMENTS
     assert len(sources) == MAX_INLINE_ATTACHMENTS
     assert calls == MAX_INLINE_ATTACHMENTS
+
+
+def test_deliver_attaches_normalized_pulse_images_as_inline_jpegs(monkeypatch):
+    import listing_agent.digest as digest
+
+    class Result:
+        def fetchone(self):
+            return None
+
+    class Connection:
+        def execute(self, query, params):
+            return Result()
+
+    listing_image = BytesIO()
+    Image.new("RGB", (1, 1), "red").save(listing_image, format="JPEG")
+    efficiency = [{"date": datetime(2026, 8, 28).date(), "like": 2, "dislike": 1, "discrete_filter_failures": 3, "taste_classifier_failures": 1}]
+    sent = []
+    monkeypatch.setattr(digest, "fetch_rows", lambda *args: [{
+        "source": "ebay", "external_id": "listing-1", "title": "A listing", "price": "1", "currency": "USD",
+        "price_usd": "1", "url": "https://example.test/item", "image_urls": ["https://example.test/image.jpg"],
+        "taste_verdict": "like",
+    }])
+    monkeypatch.setattr(digest, "download_images", lambda rows: ({"listing-1": "cid:listing-1@digest"}, [("listing-1@digest", listing_image.getvalue(), "image", "jpeg")]))
+    monkeypatch.setattr(digest, "translate_rows", lambda *args: None)
+    monkeypatch.setattr(digest, "fetch_efficiency", lambda *args: efficiency)
+    monkeypatch.setattr(digest, "fetch_usage", lambda *args: {"prompt_tokens": 0, "completion_tokens": 0, "cache_read_tokens": 0})
+    monkeypatch.setattr(digest, "send", lambda message, *args: sent.append(message))
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.test")
+    monkeypatch.setenv("SMTP_USERNAME", "user")
+    monkeypatch.setenv("SMTP_PASSWORD", "pass")
+
+    assert digest.deliver(Connection(), datetime(2026, 8, 28, tzinfo=timezone.utc), "digest@example.com") == 1
+    related = [part for part in sent[0].walk() if part.get_content_maintype() == "image"]
+    assert {part["Content-ID"] for part in related} == {"listing-1@digest", "efficiency-pulse", "pipeline-outcomes"}
+    assert all(part.get_content_subtype() == "jpeg" for part in related)
+    assert all(part.get_content_disposition() == "inline" for part in related)
 
 
 def test_render_groups_listing_and_adds_feedback_links():
@@ -184,7 +339,9 @@ def test_render_marks_taste_filtered_section():
         "image_urls": [], "description": "Private seller notes", "filter_reason": "price exceeds limit", "taste_reason": "Not a taste match",
         "title_reason": None, "taste_verdict": "dislike"
     }], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc))
-    assert "FILTERED" in markup
+    assert ">filtered</span>" in markup
+    assert ">FILTERED</p>" not in markup
+    assert "DISLIKE / EDIT VERDICT" not in markup
     assert "background:#ffffff;border:1px solid #c77983" in markup
     assert "Not a taste match" in markup
     assert "price exceeds limit" not in markup
@@ -198,6 +355,33 @@ def test_render_marks_taste_filtered_section():
     }], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc))
     assert "Private seller notes" not in text
     assert "Description:" not in text
+
+
+def test_render_uses_status_and_stable_distinct_source_badges():
+    rows = [
+        {
+            "source": "ebay", "external_id": "passed", "title": "Passed listing",
+            "price": "10.00", "currency": "USD", "price_usd": "10.00",
+            "url": "https://example.test/passed", "image_urls": [], "taste_verdict": "like",
+        },
+        {
+            "source": "invaluable", "external_id": "filtered", "title": "Filtered listing",
+            "price": "20.00", "currency": "USD", "price_usd": "20.00",
+            "url": "https://example.test/filtered", "image_urls": [], "taste_verdict": "dislike",
+            "section": "Filtered", "taste_reason": "Not a taste match",
+        },
+    ]
+
+    _, markup = render(rows, "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc))
+
+    assert ">Passed</span>" in markup
+    assert ">filtered</span>" in markup
+    assert "LIKE / EDIT VERDICT" not in markup
+    assert "DISLIKE / EDIT VERDICT" not in markup
+    assert _source_color("ebay") == _source_color("ebay")
+    assert _source_color("ebay") != _source_color("invaluable")
+    assert f"background:{_source_color('ebay')};border:1px solid {_source_color('ebay')}" in markup
+    assert f"background:{_source_color('invaluable')};border:1px solid {_source_color('invaluable')}" in markup
 
 
 def test_render_places_all_passed_listings_before_filtered_listings():

@@ -86,7 +86,7 @@ SMTP_PORT=587
 
 `IMAP_PASSWORD` and `SMTP_PASSWORD` may use the same Google App Password. `IMAP_USERNAME` receives Like/Dislike feedback replies. Set `FEEDBACK_FROM` to the email address you use to send those feedback replies; it is the trusted sender allowlist entry. If it is omitted, the ingest falls back to `DIGEST_FROM` and then `IMAP_USERNAME`. `DIGEST_TO` receives the digest.
 
-Invaluable alert emails are moved after processing: emails that produce one or more listing records go to `IMAP_INGESTED_FOLDER` (default `Invaluable/Ingested`), while matching emails that produce no records or fail during processing go to `IMAP_FAILED_FOLDER` (default `Invaluable/Not Ingested`). Set either value to an empty string to disable that move. On Gmail, these are labels/folders created through IMAP.
+Invaluable alert emails are moved after processing: emails that produce one or more listing records go to `IMAP_INGESTED_FOLDER` (default `Invaluable/Ingested`), while matching emails that produce no records or fail during processing go to `IMAP_FAILED_FOLDER` (default `Invaluable/Not Ingested`). Set either value to an empty string to disable that move. In GitHub Actions, an empty secret export is treated as unset and therefore uses the default; use a non-empty secret only when overriding the folder. On Gmail, these are labels/folders created through IMAP.
 
 Never put secret values in workflow YAML or committed configuration files.
 

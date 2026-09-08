@@ -1,4 +1,6 @@
-from listing_agent.ai import OpenAIJudge, _taste_hash, _title_hash, is_fast_tracked, title_gate, taste_judgment
+from datetime import datetime, timezone
+
+from listing_agent.ai import OpenAIJudge, _taste_hash, _title_hash, is_fast_tracked, run_with_config, title_gate, taste_judgment
 
 
 class FakeJudge(OpenAIJudge):
@@ -56,6 +58,31 @@ def test_ai_hashes_ignore_volatile_source_metadata():
     search = {"query": "listing", "category": "art"}
     assert _title_hash(listing, search, "instructions", "model") == _title_hash(changed, search, "instructions", "model")
     assert _taste_hash(listing, "art", {"weights": [1]}) == _taste_hash(changed, "art", {"weights": [1]})
+
+
+def test_run_with_config_scopes_candidates_since_when_requested(monkeypatch):
+    class Result:
+        def fetchall(self):
+            return []
+
+    class Connection:
+        def __init__(self):
+            self.query = None
+            self.params = None
+
+        def execute(self, query, params=()):
+            self.query = query
+            self.params = params
+            return Result()
+
+    monkeypatch.setattr("listing_agent.ai.SupabaseStorage", lambda: object())
+    conn = Connection()
+    since = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+
+    assert run_with_config(conn, {}, {}, since=since) == 0
+    assert "filter_status = 'passed'" in conn.query
+    assert "fetched_at >= %s" in conn.query
+    assert conn.params == (since,)
 
 
 def test_taste_judgment_normalizes_invalid_verdict():
