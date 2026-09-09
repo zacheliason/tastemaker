@@ -107,7 +107,8 @@ def evaluate(row: dict, search: dict) -> tuple[str, str | None]:
     return "passed", None
 
 
-def apply(conn, searches: dict, source: str | None = None) -> dict[str, dict[str, int]]:
+def apply(conn, searches: dict, source: str | None = None,
+          since: datetime | None = None) -> dict[str, dict[str, int]]:
     configured = dict(configured_sources(searches))
     sources = [source] if source else list(configured)
     summary = {}
@@ -115,7 +116,12 @@ def apply(conn, searches: dict, source: str | None = None) -> dict[str, dict[str
         if current_source not in configured:
             continue
         source_searches = {item["id"]: item for item in enabled_searches(configured[current_source])}
-        rows = conn.execute("select id, search_id, title, description, price_usd, size_fields, raw_data from listings where source = %s", (current_source,)).fetchall()
+        query = "select id, search_id, title, description, price_usd, size_fields, raw_data from listings where source = %s"
+        params = [current_source]
+        if since is not None:
+            query += " and fetched_at >= %s"
+            params.append(since)
+        rows = conn.execute(query, tuple(params)).fetchall()
         before = len(rows)
         passed = filtered = 0
         for row in rows:

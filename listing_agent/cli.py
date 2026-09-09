@@ -66,8 +66,9 @@ def main() -> None:
         from .filters import apply
         if not os.environ.get("DATABASE_URL"):
             parser.error("filter requires DATABASE_URL")
+        since = datetime.fromisoformat(args.since) if args.since else None
         with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
-            summary = apply(conn, config, args.source)
+            summary = apply(conn, config, args.source, since)
         for source, counts in summary.items():
             print(f"{source}: before={counts['before']} passed={counts['passed']} filtered={counts['filtered']}")
         return
