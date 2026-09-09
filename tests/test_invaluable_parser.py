@@ -160,6 +160,33 @@ def test_move_message_copies_and_marks_source_message_deleted():
     ]
 
 
+def test_move_message_continues_when_create_returns_imap_bad():
+    import imaplib
+
+    class Mailbox:
+        def __init__(self):
+            self.calls = []
+
+        def create(self, folder):
+            self.calls.append(("create", folder))
+            raise imaplib.IMAP4.error("CREATE failed")
+
+        def copy(self, message_id, folder):
+            self.calls.append(("copy", message_id, folder))
+            return "OK", [b"copied"]
+
+        def store(self, message_id, operation, flags):
+            self.calls.append(("store", message_id, operation, flags))
+            return "OK", [b"deleted"]
+
+    mailbox = Mailbox()
+    _move_message(mailbox, b"7", "Invaluable/Ingested")
+    assert mailbox.calls[1:] == [
+        ("copy", b"7", "Invaluable/Ingested"),
+        ("store", b"7", "+FLAGS", "(\\Deleted)"),
+    ]
+
+
 def test_move_message_does_nothing_for_disabled_folder():
     class Mailbox:
         def __getattr__(self, name):

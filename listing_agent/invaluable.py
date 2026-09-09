@@ -73,7 +73,12 @@ def _move_message(mailbox, message_id: bytes, folder: str) -> None:
     """Move a message within the selected IMAP mailbox via COPY + delete."""
     if not folder:
         return
-    status, _ = mailbox.create(folder)
+    # Gmail may return BAD when CREATE is issued for an existing label. COPY
+    # is the operation that tells us whether the destination is usable.
+    try:
+        status, _ = mailbox.create(folder)
+    except imaplib.IMAP4.error:
+        status = "NO"
     if status not in {"OK", "NO"}:
         raise RuntimeError(f"could not create IMAP folder {folder!r}")
     status, response = mailbox.copy(message_id, folder)
@@ -516,7 +521,13 @@ def fetch(search: dict) -> list[Listing]:
             except Exception as error:
                 print(f"invaluable email processing failed: {error}")
             if destination != source_folder:
-                _move_message(mailbox, message_id, destination)
+                try:
+                    _move_message(mailbox, message_id, destination)
+                except (imaplib.IMAP4.error, OSError, RuntimeError) as error:
+                    print(
+                        f"invaluable email move failed: message_id={message_id!r} "
+                        f"destination={destination!r} error={error}"
+                    )
             moved_count += 1
         statuses = {}
         for item in listings:
