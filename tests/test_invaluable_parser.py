@@ -45,14 +45,17 @@ def test_catalog_email_is_detected_and_catalog_pages_are_category_driven():
     )
 
 
-def test_parse_message_ignores_unqualified_salesforce_tracking_links():
+def test_parse_message_keeps_unqualified_salesforce_tracking_cards():
     message = EmailMessage()
     message.set_content(
         '<a href="https://click.e.invaluable.com/?qs=lot">'
         '<img alt="catalog lot" src="https://image.example/lot.jpg"></a>',
         subtype="html",
     )
-    assert parse_message(message, {"id": "test"}) == []
+    items = parse_message(message, {"id": "test"})
+    assert len(items) == 1
+    assert items[0].title == "catalog lot"
+    assert items[0].url == "https://click.e.invaluable.com/"
 
 
 def test_parse_catalog_page_marks_lots_local():
@@ -138,6 +141,31 @@ def test_parse_message_uses_recommendation_image_metadata_for_tracked_links():
     assert items[0].title == "Zdeněk Sýkora (1920 Louny 2011)"
     assert items[0].url == "https://www.invaluable.com/auction-lot/-0022696213"
     assert items[0].image_urls == ["https://image.invaluable.com/lot.jpg"]
+
+
+def test_parse_message_supports_lazy_images_and_data_lot_attributes():
+    message = EmailMessage()
+    message.set_content(
+        """<a data-href="https://invaluable.us-1.evergage.com/tecr?q=tracked"
+            data-item-id="987654" data-title="David Hockney print">
+          <img data-src="https://image.invaluable.com/hockney.jpg" alt="">
+        </a>""",
+        subtype="html",
+    )
+    items = parse_message(message, {"id": "test"})
+    assert len(items) == 1
+    assert items[0].title == "David Hockney print"
+    assert items[0].url == "https://www.invaluable.com/auction-lot/-987654"
+    assert items[0].image_urls == ["https://image.invaluable.com/hockney.jpg"]
+
+
+def test_parse_message_ignores_tracking_links_without_lot_identity():
+    message = EmailMessage()
+    message.set_content(
+        '<a data-href="https://invaluable.us-1.evergage.com/tecr?q=tracked">View more</a>',
+        subtype="html",
+    )
+    assert parse_message(message, {"id": "test"}) == []
 
 
 def test_listing_key_matches_full_and_canonical_invaluable_slugs():

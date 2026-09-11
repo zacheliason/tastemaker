@@ -316,6 +316,18 @@ def test_render_groups_listing_and_adds_feedback_links():
     assert "Classifier used" not in markup
 
 
+def test_render_uses_a_discrete_category_badge():
+    _, markup = render([{
+        "source": "ebay", "external_id": "category-1", "title": "A chair",
+        "price": "80.00", "currency": "USD", "price_usd": "80.00",
+        "url": "https://example.test/item", "image_urls": [],
+        "category": "home_decor", "taste_verdict": "like",
+    }], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc))
+    assert ">HOME DECOR</span>" in markup
+    assert "background:#dcecf0;border:1px solid #dcecf0;color:#35636b" in markup
+    assert "Category: <strong>Home Decor</strong>" not in markup
+
+
 def test_render_does_not_show_classifier_metadata():
     _, markup = render([{
         "source": "invaluable", "external_id": "fast-1", "title": "Fast tracked lot",

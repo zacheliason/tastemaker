@@ -39,13 +39,17 @@ def _html(message: Message) -> str:
     if message.is_multipart():
         for part in message.walk():
             if part.get_content_type() == "text/html":
-                return part.get_payload(decode=True).decode(
-                    part.get_content_charset() or "utf-8", errors="replace"
-                )
+                payload = part.get_payload(decode=True)
+                if payload:
+                    return payload.decode(
+                        part.get_content_charset() or "utf-8", errors="replace"
+                    )
     elif message.get_content_type() == "text/html":
-        return message.get_payload(decode=True).decode(
-            message.get_content_charset() or "utf-8", errors="replace"
-        )
+        payload = message.get_payload(decode=True)
+        if payload:
+            return payload.decode(
+                message.get_content_charset() or "utf-8", errors="replace"
+            )
     return ""
 
 
@@ -269,46 +273,94 @@ def fetch_catalog_email(message: Message, search: dict) -> list[Listing]:
 def parse_message(message: Message, search: dict) -> list[Listing]:
     soup = BeautifulSoup(_html(message), "html.parser")
     output = []
-    images = soup.select('img[alt="lot image"][src]') or soup.select("a[href] img[src]")
-    candidates = [(image.find_parent("a", href=True), image) for image in images]
-    existing_hrefs = {link.get("href") for link, _ in candidates if link}
-    candidates.extend(
-        (link, link.select_one("img[src]"))
-        for link in soup.select('a[href*="/auction-lot/"]')
-        if link.get("href") not in existing_hrefs
-    )
+    candidates = []
+    seen_links = set()
+    for link in soup.select("a[href], a[data-href], a[data-url], a[data-lot-url]"):
+        href = (
+            link.get("href")
+            or link.get("data-href")
+            or link.get("data-url")
+            or link.get("data-lot-url")
+            or ""
+        )
+        image = link.select_one("img")
+        item_id = next(
+            (
+                value
+                for attribute in ("itemid", "data-itemid", "data-item-id", "data-lot-id")
+                for value in (link.get(attribute), (link.select_one("[itemid]") or {}).get("itemid"))
+                if value
+            ),
+            None,
+        )
+        parsed_href = urlsplit(href)
+        is_lot_link = "/auction-lot/" in parsed_href.path.lower()
+        is_tracked_lot = bool(item_id) and (
+            parsed_href.netloc.lower().endswith(".invaluable.com")
+            or parsed_href.netloc.lower().endswith(".evergage.com")
+        )
+        # Recommendation emails often wrap the lot image in a Salesforce or
+        # Evergage tracking URL without exposing a lot id. Keep the card; the
+        # old parser handled these links and dropping them loses whole emails.
+        is_image_candidate = bool(image)
+        if not is_lot_link and not is_tracked_lot and not is_image_candidate:
+            continue
+        if href in seen_links:
+            continue
+        seen_links.add(href)
+        candidates.append((link, image))
     seen_urls = set()
     for link, image in candidates:
         if not link:
             continue
-        item_id = link.get("itemid") or (image.get("itemid") if image else None)
-        parsed_href = urlsplit(link.get("href", ""))
-        if (
-            parsed_href.netloc.lower() == "click.e.invaluable.com"
-            and not item_id
-        ):
-            # Salesforce tracking links do not identify a lot after their query is stripped.
-            continue
-        if "/tecr" in link.get("href", "") and not item_id:
-            continue
+        item_id = next(
+            (
+                value
+                for attribute in ("itemid", "data-itemid", "data-item-id", "data-lot-id")
+                for value in (link.get(attribute), (image or {}).get(attribute))
+                if value
+            ),
+            None,
+        )
+        href_value = (
+            link.get("href")
+            or link.get("data-href")
+            or link.get("data-url")
+            or link.get("data-lot-url")
+            or ""
+        )
         container = (image.find_parent("table") if image else None) or link.parent
         title_cell = container.select_one('td[style*="font-weight:bold"]')
         title = (
             title_cell.get_text(" ", strip=True)
             if title_cell
-            else _deduplicate_repeated_text(link.get_text(" ", strip=True))
-            or _deduplicate_repeated_text(image.get("alt", "") if image else "")
+            else _deduplicate_repeated_text(
+                link.get("data-title")
+                or link.get("aria-label")
+                or link.get_text(" ", strip=True)
+            )
+            or _deduplicate_repeated_text(
+                (image.get("alt") or image.get("data-title") or "") if image else ""
+            )
         )
         if not title or title.lower() in {"lot image", "invaluable"}:
             continue
-        image_urls = strip_queries([image["src"]]) if image else []
+        image_url = next(
+            (
+                image.get(attribute)
+                for attribute in ("src", "data-src", "data-original", "data-lazy-src")
+                if image and image.get(attribute)
+            ),
+            None,
+        )
+        image_urls = strip_queries([image_url]) if image_url else []
         href = (
             f"https://www.invaluable.com/auction-lot/-{item_id}"
             if item_id
             else strip_query(
                 link.get("title", "")
                 if link.get("title", "").startswith("https://")
-                else urljoin("https://www.invaluable.com", link["href"])
+                else urljoin("https://www.invaluable.com", href_value)
             )
         )
         if href in seen_urls:
@@ -487,7 +539,19 @@ def fetch(search: dict) -> list[Listing]:
                     break
             destination = failed_folder
             try:
-                message = email.message_from_bytes(raw[0][1])
+                raw_message = next(
+                    (
+                        part[1]
+                        for part in raw
+                        if isinstance(part, tuple)
+                        and len(part) > 1
+                        and isinstance(part[1], bytes)
+                    ),
+                    None,
+                )
+                if not raw_message:
+                    raise RuntimeError("IMAP returned no RFC822 message payload")
+                message = email.message_from_bytes(raw_message)
                 sender = parseaddr(message.get("From", ""))[1].lower()
                 if search.get("sender_domains") and not any(
                     sender.endswith("@" + domain.lower())
