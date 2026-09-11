@@ -166,8 +166,8 @@ def test_move_message_copies_and_marks_source_message_deleted():
     mailbox = Mailbox()
     _move_message(mailbox, b"7", "Invaluable/Ingested")
     assert mailbox.calls == [
-        ("create", "Invaluable/Ingested"),
-        ("copy", b"7", "Invaluable/Ingested"),
+        ("create", '"Invaluable/Ingested"'),
+        ("copy", b"7", '"Invaluable/Ingested"'),
         ("store", b"7", "+FLAGS", "(\\Deleted)"),
     ]
 
@@ -194,7 +194,7 @@ def test_move_message_continues_when_create_returns_imap_bad():
     mailbox = Mailbox()
     _move_message(mailbox, b"7", "Invaluable/Ingested")
     assert mailbox.calls[1:] == [
-        ("copy", b"7", "Invaluable/Ingested"),
+        ("copy", b"7", '"Invaluable/Ingested"'),
         ("store", b"7", "+FLAGS", "(\\Deleted)"),
     ]
 

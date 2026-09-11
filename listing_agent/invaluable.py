@@ -73,15 +73,18 @@ def _move_message(mailbox, message_id: bytes, folder: str) -> None:
     """Move a message within the selected IMAP mailbox via COPY + delete."""
     if not folder:
         return
+    # imaplib does not quote string command arguments; labels containing spaces
+    # otherwise become multiple IMAP tokens and Gmail rejects the command.
+    quoted_folder = '"' + folder.replace("\\", "\\\\").replace('"', '\\"') + '"'
     # Gmail may return BAD when CREATE is issued for an existing label. COPY
     # is the operation that tells us whether the destination is usable.
     try:
-        status, _ = mailbox.create(folder)
+        status, _ = mailbox.create(quoted_folder)
     except imaplib.IMAP4.error:
         status = "NO"
     if status not in {"OK", "NO"}:
         raise RuntimeError(f"could not create IMAP folder {folder!r}")
-    status, response = mailbox.copy(message_id, folder)
+    status, response = mailbox.copy(message_id, quoted_folder)
     if status != "OK":
         raise RuntimeError(
             f"could not copy message to IMAP folder {folder!r}: {response!r}"
