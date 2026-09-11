@@ -141,6 +141,7 @@ Within each source’s `searches` array, edit:
 - Deterministic outcomes are stored in `listings.filter_reason`; AI title and taste outcomes are stored separately in `ai_judgments.title_reason` and `ai_judgments.taste_reason`.
 - `limit` is the maximum number of source results ingested; `max_price_usd` is the price threshold. They are not duplicates.
 - eBay listings are only inserted once, using the stable eBay item ID or normalized listing URL; previously seen items are not refreshed into the daily digest.
+- Listings are marked with `digest_seen_at` only after a digest email is successfully sent. Marked listings are excluded from deterministic filtering, AI judgment, and future digests, so items that arrive before a later digest remain eligible until they are actually delivered.
 - `category` must be `art`, `home_decor`, or `clothing` and selects the matching reference pool.
 - `enrichment_provider` selects the configured page-fetch adapter; this project uses authorized `zenrows`.
 - Set `enabled` to `false` to pause a search.

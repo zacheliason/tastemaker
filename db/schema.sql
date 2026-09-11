@@ -16,6 +16,7 @@ create table if not exists listings (
   filter_reason text,
   filtered_at timestamptz,
   sale_end_at timestamptz,
+  digest_seen_at timestamptz,
   fetched_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
   unique (source, external_id)
@@ -28,6 +29,9 @@ alter table listings add column if not exists filter_status text not null defaul
 alter table listings add column if not exists filter_reason text;
 alter table listings add column if not exists filtered_at timestamptz;
 alter table listings add column if not exists sale_end_at timestamptz;
+alter table listings add column if not exists digest_seen_at timestamptz;
+
+create index if not exists listings_digest_seen_idx on listings (digest_seen_at) where digest_seen_at is null;
 
 -- Source-specific flags such as local-auction provenance remain in raw_data.
 

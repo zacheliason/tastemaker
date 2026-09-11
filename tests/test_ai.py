@@ -81,6 +81,7 @@ def test_run_with_config_scopes_candidates_since_when_requested(monkeypatch):
 
     assert run_with_config(conn, {}, {}, since=since) == 0
     assert "filter_status = 'passed'" in conn.query
+    assert "digest_seen_at is null" in conn.query
     assert "fetched_at >= %s" in conn.query
     assert conn.params == (since,)
 

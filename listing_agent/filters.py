@@ -116,7 +116,7 @@ def apply(conn, searches: dict, source: str | None = None,
         if current_source not in configured:
             continue
         source_searches = {item["id"]: item for item in enabled_searches(configured[current_source])}
-        query = "select id, search_id, title, description, price_usd, size_fields, raw_data from listings where source = %s"
+        query = "select id, search_id, title, description, price_usd, size_fields, raw_data from listings where source = %s and digest_seen_at is null"
         params = [current_source]
         if since is not None:
             query += " and fetched_at >= %s"

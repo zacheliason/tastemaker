@@ -33,5 +33,6 @@ def test_apply_scopes_rows_to_since_window():
     }, since=since)
 
     assert "fetched_at >= %s" in conn.select_query
+    assert "digest_seen_at is null" in conn.select_query
     assert conn.select_params == ("ebay", since)
     assert summary == {"ebay": {"before": 1, "passed": 1, "filtered": 0}}

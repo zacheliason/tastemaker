@@ -272,7 +272,11 @@ def test_deliver_attaches_normalized_pulse_images_as_inline_jpegs(monkeypatch):
             return None
 
     class Connection:
+        def __init__(self):
+            self.queries = []
+
         def execute(self, query, params):
+            self.queries.append((query, params))
             return Result()
 
     listing_image = BytesIO()
@@ -293,7 +297,12 @@ def test_deliver_attaches_normalized_pulse_images_as_inline_jpegs(monkeypatch):
     monkeypatch.setenv("SMTP_USERNAME", "user")
     monkeypatch.setenv("SMTP_PASSWORD", "pass")
 
-    assert digest.deliver(Connection(), datetime(2026, 8, 28, tzinfo=timezone.utc), "digest@example.com") == 1
+    connection = Connection()
+    assert digest.deliver(connection, datetime(2026, 8, 28, tzinfo=timezone.utc), "digest@example.com") == 1
+    assert any(
+        query.startswith("update listings set digest_seen_at") and params == ("ebay", "listing-1")
+        for query, params in connection.queries
+    )
     related = [part for part in sent[0].walk() if part.get_content_maintype() == "image"]
     assert {part["Content-ID"] for part in related} == {"listing-1@digest", "efficiency-pulse", "pipeline-outcomes"}
     assert all(part.get_content_subtype() == "jpeg" for part in related)
@@ -457,8 +466,9 @@ def test_fetch_rows_only_includes_taste_filtered_items():
     class Connection:
         def execute(self, query, params):
             assert "l.filter_status = 'passed'" in query
+            assert "l.digest_seen_at is null" in query
             assert "j.taste_verdict = 'dislike'" in query
-            assert params[1] is True
+            assert params[0] is True
             return Result()
 
     rows = fetch_rows(Connection(), datetime(2026, 8, 28, tzinfo=timezone.utc), include_filtered=True)

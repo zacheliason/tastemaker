@@ -266,11 +266,11 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
 def fetch_rows(conn, start: datetime, include_filtered: bool = False) -> list[dict]:
     rows = conn.execute("""select l.source, l.external_id, l.title, l.price, l.currency, l.price_usd,
         l.description, l.url, l.image_urls, l.sale_end_at, l.raw_data, l.filter_status, l.filter_reason,
-        j.title_reason, j.title_pass, j.category, j.taste_verdict, j.taste_reason
-        from listings l left join ai_judgments j on j.listing_id = l.id
-        where l.fetched_at >= %s and l.filter_status = 'passed' and j.title_pass = true and
-          (j.taste_verdict in ('like', 'uncertain') or (%s and l.filter_status = 'passed' and j.taste_verdict = 'dislike'))
-        order by case when j.taste_verdict = 'dislike' then 1 else 0 end, l.source, l.fetched_at desc""", (start, include_filtered)).fetchall()
+         j.title_reason, j.title_pass, j.category, j.taste_verdict, j.taste_reason
+         from listings l left join ai_judgments j on j.listing_id = l.id
+         where l.digest_seen_at is null and l.filter_status = 'passed' and j.title_pass = true and
+           (j.taste_verdict in ('like', 'uncertain') or (%s and l.filter_status = 'passed' and j.taste_verdict = 'dislike'))
+         order by case when j.taste_verdict = 'dislike' then 1 else 0 end, l.source, l.fetched_at desc""", (include_filtered,)).fetchall()
     keys = ("source", "external_id", "title", "price", "currency", "price_usd", "description", "url", "image_urls", "sale_end_at", "raw_data", "filter_status", "filter_reason", "title_reason", "title_pass", "category", "taste_verdict", "taste_reason")
     output = [dict(zip(keys, row)) for row in rows]
     for row in output:
@@ -496,6 +496,11 @@ def deliver(conn, start: datetime, recipient: str, dry_run: bool = False, includ
         if missing:
             raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
         send(message, host, int(os.environ.get("SMTP_PORT", "587")), username, password)
+        for row in rows:
+            conn.execute(
+                "update listings set digest_seen_at = now() where source = %s and external_id = %s and digest_seen_at is null",
+                (row["source"], row["external_id"]),
+            )
         conn.execute("insert into digest_runs (digest_date, recipient, item_count) values (%s,%s,%s) on conflict (digest_date, recipient) do update set item_count=excluded.item_count, sent_at=now()", (start.date(), recipient, len(rows)))
     return len(rows)
 

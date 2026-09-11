@@ -283,7 +283,7 @@ def run_with_config(conn, config: dict, ai_config: dict, source: str | None = No
     source_clause = "" if source is None else " and source = %s"
     since_clause = "" if since is None else " and fetched_at >= %s"
     params = tuple(value for value in (source, since) if value is not None)
-    rows = conn.execute("select id, source, search_id, external_id, title, description, size_fields, image_urls, raw_data from listings where filter_status = 'passed'" + source_clause + since_clause, params).fetchall()
+    rows = conn.execute("select id, source, search_id, external_id, title, description, size_fields, image_urls, raw_data from listings where filter_status = 'passed' and digest_seen_at is null" + source_clause + since_clause, params).fetchall()
     listings = [{"id": r[0], "source": r[1], "search_id": r[2], "external_id": r[3], "title": r[4], "description": r[5], "size_fields": r[6] or {}, "image_urls": r[7] or [], "raw_data": r[8] or {}, "search": (r[8] or {}).get("_search_config", {})} for r in rows]
     logger.info("AI candidates: source=%s filter_status=passed count=%d", source or "all", len(listings))
     search_map = {item["id"]: item for _, settings in configured_sources(config) for item in enabled_searches(settings)}
