@@ -7,7 +7,7 @@ import json
 import os
 import re
 import time
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from email.header import decode_header
@@ -144,7 +144,7 @@ def _catalog_links(message: Message) -> list[str]:
         text = link.get_text(" ", strip=True).lower()
         title = (link.get("title") or "").lower()
         if "view catalog" in text or "view new " in title and "catalog" in title:
-            links.append(link["href"])
+            links.append(urljoin("https://www.invaluable.com", link["href"]))
     return list(dict.fromkeys(links))
 
 
@@ -156,6 +156,7 @@ def _is_catalog_email(message: Message) -> bool:
 
 
 def _resolve_catalog_url(url: str) -> str:
+    url = urljoin("https://www.invaluable.com", url)
     if "/catalog/" in url:
         return url
     response = httpx.get(url, follow_redirects=True, timeout=30)
@@ -304,7 +305,7 @@ def parse_message(message: Message, search: dict) -> list[Listing]:
             else strip_query(
                 link.get("title", "")
                 if link.get("title", "").startswith("https://")
-                else link["href"]
+                else urljoin("https://www.invaluable.com", link["href"])
             )
         )
         if href in seen_urls:
@@ -438,19 +439,24 @@ def fetch(search: dict) -> list[Listing]:
             _listing_key(row[0])
             for row in conn.execute("select url from listings where source = 'invaluable'").fetchall()
         }
-    mailbox = imaplib.IMAP4_SSL(
-        env["IMAP_HOST"], int(os.environ.get("IMAP_PORT", "993"))
-    )
+    source_folder = os.environ.get("IMAP_FOLDER", "INBOX")
+
+    def connect_mailbox():
+        connection = imaplib.IMAP4_SSL(
+            env["IMAP_HOST"], int(os.environ.get("IMAP_PORT", "993"))
+        )
+        connection.login(env["IMAP_USERNAME"], env["IMAP_PASSWORD"])
+        connection.select(source_folder, readonly=False)
+        return connection
+
+    mailbox = connect_mailbox()
     try:
-        mailbox.login(env["IMAP_USERNAME"], env["IMAP_PASSWORD"])
-        source_folder = os.environ.get("IMAP_FOLDER", "INBOX")
         ingested_folder = _imap_folder(
             "IMAP_INGESTED_FOLDER", "Invaluable/Ingested"
         )
         failed_folder = _imap_folder(
             "IMAP_FAILED_FOLDER", "Invaluable/Not Ingested"
         )
-        mailbox.select(source_folder, readonly=False)
         criteria = "UNSEEN"
         if search.get("senders"):
             senders = search["senders"]
@@ -460,7 +466,22 @@ def fetch(search: dict) -> list[Listing]:
         listings = []
         moved_count = 0
         for message_id in data[0].split():
-            _, raw = mailbox.fetch(message_id, "(RFC822)")
+            try:
+                _, raw = mailbox.fetch(message_id, "(RFC822)")
+            except (imaplib.IMAP4.error, OSError) as error:
+                print(f"invaluable IMAP fetch failed; reconnecting: {error}")
+                try:
+                    mailbox.logout()
+                except Exception:
+                    pass
+                try:
+                    mailbox = connect_mailbox()
+                    _, raw = mailbox.fetch(message_id, "(RFC822)")
+                except (imaplib.IMAP4.error, OSError) as retry_error:
+                    print(
+                        f"invaluable IMAP fetch failed after reconnect: {retry_error}"
+                    )
+                    break
             destination = failed_folder
             try:
                 message = email.message_from_bytes(raw[0][1])
@@ -524,10 +545,20 @@ def fetch(search: dict) -> list[Listing]:
                 try:
                     _move_message(mailbox, message_id, destination)
                 except (imaplib.IMAP4.error, OSError, RuntimeError) as error:
-                    print(
-                        f"invaluable email move failed: message_id={message_id!r} "
-                        f"destination={destination!r} error={error}"
-                    )
+                    print(f"invaluable email move failed; reconnecting: {error}")
+                    try:
+                        mailbox.logout()
+                    except Exception:
+                        pass
+                    try:
+                        mailbox = connect_mailbox()
+                        _move_message(mailbox, message_id, destination)
+                    except (imaplib.IMAP4.error, OSError, RuntimeError) as retry_error:
+                        print(
+                            f"invaluable email move failed after reconnect: "
+                            f"message_id={message_id!r} destination={destination!r} "
+                            f"error={retry_error}"
+                        )
             moved_count += 1
         statuses = {}
         for item in listings:

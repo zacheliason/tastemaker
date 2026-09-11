@@ -112,6 +112,18 @@ def test_parse_message_extracts_recommendation_lot_links_and_deduplicates_artist
     assert items[0].image_urls == []
 
 
+def test_parse_message_resolves_relative_lot_links():
+    message = EmailMessage()
+    message.set_content(
+        '<a href="/auction-lot/example-lot-c-abc123">Example lot</a>',
+        subtype="html",
+    )
+    items = parse_message(message, {"id": "test"})
+    assert items[0].url == (
+        "https://www.invaluable.com/auction-lot/example-lot-c-abc123"
+    )
+
+
 def test_parse_message_uses_recommendation_image_metadata_for_tracked_links():
     message = EmailMessage()
     message.set_content(

@@ -1,4 +1,5 @@
 from listing_agent.zenrows import fetch_catalog_html, fetch_html
+import pytest
 
 
 class Response:
@@ -33,3 +34,9 @@ def test_zenrows_catalog_fetch_preserves_filter_query(monkeypatch):
     monkeypatch.setattr("listing_agent.zenrows.httpx.get", get)
     fetch_catalog_html("https://example.test/catalog/abc?supercategoryName=Fine+Art&page=2")
     assert calls[0][1]["params"]["url"].endswith("supercategoryName=Fine+Art&page=2")
+
+
+def test_zenrows_rejects_relative_target_urls(monkeypatch):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    with pytest.raises(ValueError, match="absolute target URL"):
+        fetch_html("/auction-lot/example")
