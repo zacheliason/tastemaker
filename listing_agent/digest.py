@@ -180,6 +180,10 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
             remaining = _remaining(row.get("sale_end_at"))
             category = _category_label(row.get("category"))
             category_background, category_text = _category_colors(row.get("category"))
+            category_metadata = (
+                f'<p style="margin:0 0 14px;color:#71807a;font-size:11px;line-height:1.55">Category: <strong>{html.escape(category)}</strong></p>'
+                if row.get("category") is None else ""
+            )
             description = "" if filtered else _description(row.get("description"))
             text.extend([row["title"], _price(row["price"], row["currency"], row["price_usd"]), row["url"]])
             if remaining:
@@ -199,7 +203,7 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
                 '<span style="display:inline-block;margin:0 6px 10px 0;padding:4px 8px;background:#e5efc7;border:1px solid #b9d27d;border-radius:999px;color:#38530f;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">Passed</span>'
             )
             source_label = f'<span style="display:inline-block;margin:0 6px 10px 0;padding:4px 8px;background:{source_color};border:1px solid {source_color};border-radius:999px;color:#f7f5ee;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">{html.escape(source)}</span>'
-            category_label = f'<span style="display:inline-block;margin:0 6px 10px 0;padding:4px 8px;background:{category_background};border:1px solid {category_background};border-radius:999px;color:{category_text};font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">{html.escape(category)}</span>'
+            category_label = f'<span style="display:inline-block;margin:0 6px 10px 0;padding:4px 8px;background:{category_background};border:1px solid {category_background};color:{category_text};border-radius:999px;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">{html.escape(category.upper())}</span>'
             local_label = '<span style="display:inline-block;margin:0 0 10px;padding:4px 7px;background:#d7ed62;color:#182b2b;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">LOCAL</span>' if row.get("local") else ""
             translated_from, _ = _description_parts(row.get("description"))
             description_markup = "" if filtered else _description_html(row.get("description"))
@@ -211,7 +215,7 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
      {status_label}{source_label}{category_label}{local_label}<h3 style="margin:0 0 10px;font-family:Georgia,'Times New Roman',serif;font-size:23px;line-height:1.1;font-weight:400;letter-spacing:-.35px"><a style="color:#182b2b;text-decoration:none" href="{html.escape(row['url'], quote=True)}">{html.escape(row['title'])}</a></h3>
    <p style="margin:0 0 5px;color:#557c1d;font-size:17px;font-weight:700;letter-spacing:-.15px">{html.escape(_price(row['price'], row['currency'], row['price_usd']))}</p>
    {f'<p style="margin:0 0 15px;color:#7b8984;font-size:11px">{html.escape(remaining)}</p>' if remaining else '<div style="height:15px"></div>'}
-   {description_html}<p style="margin:0 0 17px;color:#294442;font-size:13px;line-height:1.5">{html.escape(reason)}</p>
+    {description_html}{category_metadata}<p style="margin:0 0 17px;color:#294442;font-size:13px;line-height:1.5">{html.escape(reason)}</p>
    <p style="margin:0;font-size:12px"><a style="display:inline-block;padding:9px 15px;background:#d7ed62;color:#182b2b;font-weight:700;text-decoration:none" href="{html.escape(like, quote=True)}">Like</a>&nbsp;&nbsp;<a style="display:inline-block;padding:8px 14px;border:1px solid #a9b9b2;color:#55706b;text-decoration:none" href="{html.escape(dislike, quote=True)}">Dislike</a></p>
  </td></tr></table></td></tr></table>''')
     if not rows:
