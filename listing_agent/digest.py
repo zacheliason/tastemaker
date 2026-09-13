@@ -131,12 +131,14 @@ def _usage_cost(usage: dict) -> tuple[float, float, float, float]:
     return input_cost, output_cost, cache_read_cost, input_cost + output_cost + cache_read_cost
 
 
-def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient: str | None = None, usage: dict | None = None, image_sources: dict[str, str] | None = None, translation_usage: dict | None = None, efficiency: list[dict] | None = None, efficiency_image_source: str | None = None, outcomes_image_source: str | None = None) -> tuple[str, str]:
+def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient: str | None = None, usage: dict | None = None, image_sources: dict[str, str] | None = None, translation_usage: dict | None = None, efficiency: list[dict] | None = None, efficiency_image_source: str | None = None, outcomes_image_source: str | None = None, part: tuple[int, int] | None = None) -> tuple[str, str]:
     feedback_recipient = feedback_recipient or recipient
     grouped = {}
     for row in rows:
         grouped.setdefault((row.get("section", "Passed"), row["source"]), []).append(row)
     subject = f"Tastemaker Digest: {len(rows)} matches"
+    if part:
+        subject += f" ({part[0]}/{part[1]})"
     passed_count = sum(row.get("section", "Passed") == "Passed" for row in rows)
     filtered_count = len(rows) - passed_count
     source_count = len({row["source"] for row in rows})
@@ -244,7 +246,7 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
             "Pipeline outcomes: "
             f"Passed {outcomes['passed']}, "
             f"Failed due to discrete filters {outcomes['discrete_filter_failures']}, "
-            f"Failed by taste classifier (logistic regression) {outcomes['taste_classifier_failures']}"
+            f"Failed due to classifier {outcomes['taste_classifier_failures']}"
         )
         blocks.append('</td></tr></table>')
         if outcomes_image_source:
@@ -377,7 +379,7 @@ def outcomes_figure(efficiency: list[dict]) -> bytes:
     labels = (
         "Passed",
         "Failed due to discrete filters",
-        "Failed by taste classifier (logistic regression)",
+        "Failed due to classifier",
     )
     values = [outcomes["passed"], outcomes["discrete_filter_failures"], outcomes["taste_classifier_failures"]]
     colors = ("#557c1d", "#55706b", "#a6534c")
@@ -452,6 +454,29 @@ def send(message: EmailMessage, host: str, port: int, username: str, password: s
             smtp.send_message(message)
 
 
+def _build_message(rows: list[dict], recipient: str, start: datetime, feedback_recipient: str,
+                   usage: dict, image_sources: dict[str, str], translation_usage: dict,
+                   efficiency: list[dict], figure: bytes | None, outcomes: bytes | None,
+                   part: tuple[int, int] | None) -> EmailMessage:
+    text, markup = render(
+        rows, recipient, start, feedback_recipient, usage, image_sources,
+        translation_usage, efficiency,
+        "cid:efficiency-pulse" if figure else None,
+        "cid:pipeline-outcomes" if outcomes else None,
+        part,
+    )
+    message = EmailMessage()
+    subject = f"Tastemaker Digest: {len(rows)} matches"
+    if part:
+        subject += f" ({part[0]}/{part[1]})"
+    message["Subject"] = subject
+    message["From"] = os.environ.get("DIGEST_FROM") or os.environ.get("SMTP_USERNAME") or os.environ.get("IMAP_USERNAME", "listing-agent@localhost")
+    message["To"] = recipient
+    message.set_content(text)
+    message.add_alternative(markup, subtype="html")
+    return message
+
+
 def deliver(conn, start: datetime, recipient: str, dry_run: bool = False, include_filtered: bool = False) -> int:
     rows = fetch_rows(conn, start, include_filtered)
     if not rows and not dry_run:
@@ -467,31 +492,16 @@ def deliver(conn, start: datetime, recipient: str, dry_run: bool = False, includ
     ).fetchone():
         return 0
     feedback_recipient = os.environ.get("IMAP_USERNAME") or recipient
-    image_sources, attachments = download_images(rows) if not dry_run else ({}, [])
     translation_usage = {}
     translate_rows(conn, rows, translation_usage)
+    # Keep translation work and its cache durable even when SMTP fails later.
+    if hasattr(conn, "commit"):
+        conn.commit()
     efficiency = fetch_efficiency(conn, start, include_filtered)
     efficiency_source = "cid:efficiency-pulse"
     figure = _normalize_attachment_image(efficiency_figure(efficiency)) if efficiency else None
     outcomes_source = "cid:pipeline-outcomes"
     outcomes = _normalize_attachment_image(outcomes_figure(efficiency)) if efficiency else None
-    text, markup = render(rows, recipient, start, feedback_recipient, fetch_usage(conn, start), image_sources, translation_usage, efficiency, efficiency_source if figure else None, outcomes_source if outcomes else None)
-    message = EmailMessage()
-    message["Subject"] = f"Tastemaker Digest: {len(rows)} matches"
-    message["From"] = os.environ.get("DIGEST_FROM") or os.environ.get("SMTP_USERNAME") or os.environ.get("IMAP_USERNAME", "listing-agent@localhost")
-    message["To"] = recipient
-    message.set_content(text)
-    message.add_alternative(markup, subtype="html")
-    if attachments:
-        html_part = message.get_payload()[-1]
-        for cid, data, maintype, subtype in attachments:
-            html_part.add_related(data, maintype=maintype, subtype=subtype, cid=cid, disposition="inline")
-    if figure:
-        html_part = message.get_payload()[-1]
-        html_part.add_related(figure, maintype="image", subtype="jpeg", cid="efficiency-pulse", disposition="inline")
-    if outcomes:
-        html_part = message.get_payload()[-1]
-        html_part.add_related(outcomes, maintype="image", subtype="jpeg", cid="pipeline-outcomes", disposition="inline")
     if not dry_run:
         host = os.environ.get("SMTP_HOST") or ("smtp.gmail.com" if os.environ.get("IMAP_HOST") == "imap.gmail.com" else "")
         username = os.environ.get("SMTP_USERNAME") or os.environ.get("IMAP_USERNAME", "")
@@ -499,7 +509,27 @@ def deliver(conn, start: datetime, recipient: str, dry_run: bool = False, includ
         missing = [name for name, value in (("SMTP_HOST", host), ("SMTP_USERNAME/IMAP_USERNAME", username), ("SMTP_PASSWORD/IMAP_PASSWORD", password)) if not value]
         if missing:
             raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
-        send(message, host, int(os.environ.get("SMTP_PORT", "587")), username, password)
+    # Reserve two attachment slots for the pipeline charts on every message.
+    chunk_size = MAX_INLINE_ATTACHMENTS - int(bool(figure)) - int(bool(outcomes))
+    chunks = [rows[offset:offset + chunk_size] for offset in range(0, len(rows), chunk_size)]
+    total_parts = len(chunks)
+    for index, chunk in enumerate(chunks, 1):
+        image_sources, attachments = download_images(chunk) if not dry_run else ({}, [])
+        message = _build_message(
+            chunk, recipient, start, feedback_recipient, fetch_usage(conn, start),
+            image_sources, translation_usage, efficiency, figure, outcomes,
+            (index, total_parts) if total_parts > 1 else None,
+        )
+        html_part = message.get_payload()[-1]
+        for cid, data, maintype, subtype in attachments:
+            html_part.add_related(data, maintype=maintype, subtype=subtype, cid=cid, disposition="inline")
+        if figure:
+            html_part.add_related(figure, maintype="image", subtype="jpeg", cid="efficiency-pulse", disposition="inline")
+        if outcomes:
+            html_part.add_related(outcomes, maintype="image", subtype="jpeg", cid="pipeline-outcomes", disposition="inline")
+        if not dry_run:
+            send(message, host, int(os.environ.get("SMTP_PORT", "587")), username, password)
+    if not dry_run:
         for row in rows:
             conn.execute(
                 "update listings set digest_seen_at = now() where source = %s and external_id = %s and digest_seen_at is null",

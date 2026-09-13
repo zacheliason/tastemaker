@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from datetime import datetime
 from .config import adapter_for, configured_sources, enabled_searches, load_searches
-from .db import save
+from .db import clear_stale, save
 
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["feedback", "ingest", "filter", "import-references", "upload-references", "judge", "digest", "enrich-url"])
+    parser.add_argument("command", choices=["feedback", "cleanup", "ingest", "filter", "import-references", "upload-references", "judge", "digest", "enrich-url"])
     parser.add_argument("--config", default="config/searches.json")
     parser.add_argument("--ai-config", default="config/ai.json")
     parser.add_argument("--digest-config", default="config/digest.json")
@@ -38,6 +38,16 @@ def main() -> None:
         with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
             count = ingest(conn, bucket=args.bucket)
         print(f"feedback references added: {count}")
+        return
+    if args.command == "cleanup":
+        import os
+        import psycopg
+        if not os.environ.get("DATABASE_URL"):
+            parser.error("cleanup requires DATABASE_URL")
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+            count = clear_stale(conn)
+            conn.commit()
+        print(f"stale listings deleted: {count}")
         return
     if args.command == "enrich-url":
         if not args.url:

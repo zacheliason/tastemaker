@@ -108,7 +108,7 @@ def test_pipeline_outcomes_chart_is_normalized_and_rendered_at_end_of_pulse():
     assert 'clear:both' in markup[pulse_image - 250:pulse_image]
     assert 'width="100%"' in markup[outcomes_image - 250:outcomes_image]
     assert 'clear:both' in markup[outcomes_image - 250:outcomes_image]
-    assert "Failed by taste classifier (logistic regression) 1" in "".join(render(
+    assert "Failed due to classifier 1" in "".join(render(
         [], "digest@example.com", datetime(2026, 8, 28, tzinfo=timezone.utc), efficiency=efficiency
     )[0])
 
@@ -307,6 +307,75 @@ def test_deliver_attaches_normalized_pulse_images_as_inline_jpegs(monkeypatch):
     assert {part["Content-ID"] for part in related} == {"listing-1@digest", "efficiency-pulse", "pipeline-outcomes"}
     assert all(part.get_content_subtype() == "jpeg" for part in related)
     assert all(part.get_content_disposition() == "inline" for part in related)
+
+
+def test_deliver_splits_large_digest_and_numbers_parts(monkeypatch):
+    import listing_agent.digest as digest
+
+    class Result:
+        def fetchone(self):
+            return None
+
+    class Connection:
+        def execute(self, query, params):
+            return Result()
+
+    rows = [{
+        "source": "ebay", "external_id": str(index), "title": f"Listing {index}",
+        "price": "1", "currency": "USD", "price_usd": "1", "url": "https://example.test/item",
+        "image_urls": ["https://example.test/image.jpg"], "taste_verdict": "like",
+    } for index in range(499)]
+    sent = []
+    monkeypatch.setattr(digest, "fetch_rows", lambda *args: rows)
+    monkeypatch.setattr(digest, "translate_rows", lambda *args: None)
+    monkeypatch.setattr(digest, "fetch_efficiency", lambda *args: [{"date": datetime(2026, 8, 28).date(), "like": 1, "dislike": 0, "discrete_filter_failures": 0, "taste_classifier_failures": 0}])
+    monkeypatch.setattr(digest, "fetch_usage", lambda *args: {"prompt_tokens": 0, "completion_tokens": 0, "cache_read_tokens": 0})
+    monkeypatch.setattr(digest, "efficiency_figure", lambda *args: b"figure")
+    monkeypatch.setattr(digest, "outcomes_figure", lambda *args: b"outcomes")
+    monkeypatch.setattr(digest, "_normalize_attachment_image", lambda data: data)
+    monkeypatch.setattr(digest, "download_images", lambda chunk: ({row["external_id"]: f"cid:{row['external_id']}" for row in chunk}, [(row["external_id"], b"image", "image", "jpeg") for row in chunk]))
+    monkeypatch.setattr(digest, "send", lambda message, *args: sent.append(message))
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.test")
+    monkeypatch.setenv("SMTP_USERNAME", "user")
+    monkeypatch.setenv("SMTP_PASSWORD", "pass")
+
+    assert digest.deliver(Connection(), datetime(2026, 8, 28, tzinfo=timezone.utc), "digest@example.com") == 499
+    assert len(sent) == 2
+    assert [message["Subject"] for message in sent] == [
+        "Tastemaker Digest: 498 matches (1/2)",
+        "Tastemaker Digest: 1 matches (2/2)",
+    ]
+    assert all(sum(1 for part in message.walk() if part.get_content_maintype() == "image") <= 500 for message in sent)
+
+
+def test_deliver_sends_digest_when_every_listing_is_filtered(monkeypatch):
+    import listing_agent.digest as digest
+
+    class Result:
+        def fetchone(self):
+            return None
+
+    class Connection:
+        def execute(self, query, params):
+            return Result()
+
+    row = {
+        "source": "ebay", "external_id": "filtered", "title": "Filtered listing",
+        "price": "1", "currency": "USD", "price_usd": "1", "url": "https://example.test/item",
+        "image_urls": [], "taste_verdict": "dislike", "section": "Filtered",
+    }
+    sent = []
+    monkeypatch.setattr(digest, "fetch_rows", lambda *args: [row])
+    monkeypatch.setattr(digest, "translate_rows", lambda *args: None)
+    monkeypatch.setattr(digest, "fetch_efficiency", lambda *args: [])
+    monkeypatch.setattr(digest, "fetch_usage", lambda *args: {"prompt_tokens": 0, "completion_tokens": 0, "cache_read_tokens": 0})
+    monkeypatch.setattr(digest, "send", lambda message, *args: sent.append(message))
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.test")
+    monkeypatch.setenv("SMTP_USERNAME", "user")
+    monkeypatch.setenv("SMTP_PASSWORD", "pass")
+
+    assert digest.deliver(Connection(), datetime(2026, 8, 28, tzinfo=timezone.utc), "digest@example.com", include_filtered=True) == 1
+    assert len(sent) == 1
 
 
 def test_render_groups_listing_and_adds_feedback_links():

@@ -4,6 +4,16 @@ from .models import Listing
 from .urls import strip_queries, strip_query
 
 
+def clear_stale(conn) -> int:
+    """Delete listings whose auction is over or has been undated for two months."""
+    result = conn.execute("""
+        delete from listings
+        where sale_end_at < now()
+           or (sale_end_at is null and fetched_at < now() - interval '2 months')
+    """)
+    return result.rowcount
+
+
 def save(listings: list[Listing]) -> int:
     import psycopg
     if not os.environ.get("DATABASE_URL"):

@@ -219,7 +219,7 @@ order by fetched_at desc;
 
 The digest is sent to `DIGEST_TO`, grouped by source, and includes USD price, sale timing when available, listing image, URL, concise reasoning, and an LLM usage footer for the title gate. Listing images are fetched transiently by the runner and embedded in the email; they are not retained in Supabase Storage. Fast-tracked digests report zero usage, and local taste classification adds no LLM usage.
 
-Set `include_filtered` in `config/digest.json` to `true` while validating the service. Passed listings appear first; filtered listings appear in a clearly marked section with the same feedback controls. Set it to `false` after validation. A digest is never sent unless at least one listing passes filtering.
+Set `include_filtered` in `config/digest.json` to `true` to include taste-filtered listings. Passed listings appear first; filtered listings appear in a clearly marked section with the same feedback controls. A digest containing only filtered listings is sent as well.
 
 Like and Dislike buttons create pre-addressed replies to `IMAP_USERNAME`. Their subjects and bodies identify the listing so a later workflow can add feedback to the correct category pool.
 

@@ -66,6 +66,8 @@ jobs:
         run: echo "RUN_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" >> "$GITHUB_ENV"
       - name: Ingest listing feedback
         run: python -m listing_agent.cli feedback
+      - name: Clear stale listings
+        run: python -m listing_agent.cli cleanup
       - name: Ingest enabled sources
         run: python -m listing_agent.cli ingest
       - name: Apply deterministic filters

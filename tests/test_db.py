@@ -1,7 +1,7 @@
 import sys
 import types
 
-from listing_agent.db import save
+from listing_agent.db import clear_stale, save
 from listing_agent.models import Listing
 
 
@@ -50,3 +50,20 @@ def test_save_skips_previously_seen_ebay_item(monkeypatch):
     assert save([item]) == 0
     assert len(connection.cursor_instance.queries) == 1
     assert "select 1 from listings" in connection.cursor_instance.queries[0]
+
+
+def test_clear_stale_deletes_finished_and_undated_old_listings():
+    class Connection:
+        def __init__(self):
+            self.query = None
+
+        def execute(self, query):
+            self.query = query
+            return types.SimpleNamespace(rowcount=3)
+
+    connection = Connection()
+
+    assert clear_stale(connection) == 3
+    assert "sale_end_at < now()" in connection.query
+    assert "sale_end_at is null" in connection.query
+    assert "interval '2 months'" in connection.query

@@ -158,7 +158,7 @@ python3 -m pytest
 
 - [ ] Run a real dry-run digest and inspect both plain text and HTML.
 - [ ] Run a controlled SMTP delivery and verify inline images, links, USD/original pricing, source sections, sale timing, and concise reasons.
-- [ ] Keep the digest suppressed when there are no passing listings; verify `include_filtered` is only a temporary validation setting.
+- [x] Send digests containing only filtered listings when `include_filtered` is enabled.
 - [ ] Verify digest idempotency and `digest_runs` behavior for repeated workflow runs on the same day.
 - [ ] Keep item-specific Like/Dislike mailto subjects/bodies stable and parseable.
 - [ ] Implement feedback IMAP ingestion: identify source, external ID, action, and title from replies; ignore malformed/unrelated mail safely.
