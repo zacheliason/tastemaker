@@ -7,6 +7,7 @@ from .config import configured_sources, enabled_searches
 
 
 logger = logging.getLogger(__name__)
+GLOBAL_EXCLUDED_CONTENT = ("offset lithograph",)
 
 
 def _normalized_content(value: str) -> str:
@@ -14,14 +15,9 @@ def _normalized_content(value: str) -> str:
 
 
 def content_exclusion(row: dict, search: dict) -> str | None:
-    return next(
-        (phrase for phrase in search.get("exclude_content", [])
-         if _normalized_content(phrase) in {
-             _normalized_content(row.get("title") or ""),
-             _normalized_content(row.get("description") or ""),
-         }),
-        None,
-    )
+    content = _normalized_content(f"{row.get('title') or ''} {row.get('description') or ''}")
+    phrases = (*GLOBAL_EXCLUDED_CONTENT, *search.get("exclude_content", []))
+    return next((phrase for phrase in phrases if _normalized_content(phrase) in content), None)
 
 
 def _shoe_size_values(text: str) -> list[tuple[float, str | None]]:
@@ -63,7 +59,7 @@ def _title_size_mismatch(row: dict, search: dict) -> tuple[str, str] | None:
             for value, gender in _shoe_size_values(text):
                 if not _shoe_size_allowed(value, allowed, gender):
                     return field, str(value).removesuffix(".0")
-        if values and not any(value.lower() == str(allowed_value).lower() for value in values for allowed_value in allowed):
+        if values and not any(float(value) == float(allowed_value) for value in values for allowed_value in allowed):
             return field, values[0]
     return None
 
@@ -99,10 +95,17 @@ def evaluate(row: dict, search: dict) -> tuple[str, str | None]:
     for field, allowed in search.get("allowed_size_fields", {}).items():
         actual = (row.get("size_fields") or {}).get(field)
         gender = (row.get("size_fields") or {}).get(f"{field}_gender")
-        if actual is not None and (
-            not _shoe_size_allowed(actual, allowed, gender) if field == "shoe_size"
-            else not any(str(actual).lower() == str(value).lower() for value in allowed)
-        ):
+        if field == "shoe_size":
+            mismatch = actual is not None and not _shoe_size_allowed(actual, allowed, gender)
+        elif actual is None:
+            mismatch = False
+        else:
+            try:
+                actual_value = float(re.search(r"\d+(?:\.5)?", str(actual)).group())
+                mismatch = not any(actual_value == float(value) for value in allowed)
+            except (AttributeError, TypeError, ValueError):
+                mismatch = not any(str(actual).casefold() == str(value).casefold() for value in allowed)
+        if mismatch:
             return "filtered", f"structured size not allowed: {field}={actual} (allowed: {allowed})"
     return "passed", None
 

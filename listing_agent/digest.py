@@ -122,6 +122,21 @@ def _usd_sort_key(row: dict) -> tuple[int, Decimal]:
         return (1, Decimal("0"))
 
 
+def _digest_sort_key(row: dict) -> tuple[int, str, str, int, Decimal, str]:
+    section = row.get("section", "Passed")
+    reason = row.get("filter_reason") if section == "Filtered" else row.get("taste_reason") or row.get("title_reason")
+    missing, price = _usd_sort_key(row)
+    return (1 if section == "Filtered" else 0, row.get("category") or "zzzz", reason or "", missing, price, row.get("external_id", ""))
+
+
+def _filter_reason_label(row: dict) -> str:
+    if row.get("filter_reason"):
+        return "Discrete rule"
+    if row.get("taste_verdict") == "dislike" or row.get("title_reason"):
+        return "Classifier"
+    return "Search match"
+
+
 def _usage_cost(usage: dict) -> tuple[float, float, float, float]:
     cache_read_tokens = usage.get("cache_read_tokens", 0)
     input_tokens = max(0, usage["prompt_tokens"] - cache_read_tokens)
@@ -133,9 +148,6 @@ def _usage_cost(usage: dict) -> tuple[float, float, float, float]:
 
 def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient: str | None = None, usage: dict | None = None, image_sources: dict[str, str] | None = None, translation_usage: dict | None = None, efficiency: list[dict] | None = None, efficiency_image_source: str | None = None, outcomes_image_source: str | None = None, part: tuple[int, int] | None = None) -> tuple[str, str]:
     feedback_recipient = feedback_recipient or recipient
-    grouped = {}
-    for row in rows:
-        grouped.setdefault((row.get("section", "Passed"), row["source"]), []).append(row)
     subject = f"Tastemaker Digest: {len(rows)} matches"
     if part:
         subject += f" ({part[0]}/{part[1]})"
@@ -173,52 +185,54 @@ def render(rows: list[dict], recipient: str, start: datetime, feedback_recipient
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#f7f5ee;border-left:1px solid #dce6e1;border-right:1px solid #dce6e1">
   <tr><td class="summary-cell" style="padding:18px 24px;border-bottom:1px solid #dce6e1"><p style="margin:0;color:#55706b;font-size:10px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase">{html.escape(summary)}</p></td></tr>
 </table>''']
-    for (section, source), items in sorted(grouped.items(), key=lambda item: (item[0][0] != "Passed", item[0][1])):
-        for row in sorted(items, key=_usd_sort_key):
-            filtered = section == "Filtered"
-            reason = row.get("taste_reason") or row.get("filter_reason") or row.get("title_reason") or "Matched configured search"
-            like = _feedback_link(feedback_recipient, "like", row["source"], row["external_id"], row["title"])
-            dislike = _feedback_link(feedback_recipient, "dislike", row["source"], row["external_id"], row["title"])
-            remaining = _remaining(row.get("sale_end_at"))
-            category = _category_label(row.get("category"))
-            category_background, category_text = _category_colors(row.get("category"))
-            category_metadata = (
-                f'<p style="margin:0 0 14px;color:#71807a;font-size:11px;line-height:1.55">Category: <strong>{html.escape(category)}</strong></p>'
-                if row.get("category") is None else ""
-            )
-            description = "" if filtered else _description(row.get("description"))
-            text.extend([row["title"], _price(row["price"], row["currency"], row["price_usd"]), row["url"]])
-            if remaining:
-                text.append(remaining)
-            text.extend([f"Category: {category}", f"Verdict: {row['taste_verdict']}. {reason}", f"Like: {like}", f"Dislike: {dislike}", ""])
-            if description:
-                text.insert(-1, f"Description: {description}")
-            image = row["image_urls"][0] if row["image_urls"] else ""
-            image_source = (image_sources or {}).get(row["external_id"], image)
-            image_html = f'<img src="{html.escape(image_source, quote=True)}" alt="Listing image" width="270" style="display:block;width:100%;max-width:270px;height:auto;max-height:250px;object-fit:cover">' if image_source else '<div style="height:110px;background:#e8eeea;color:#8ca09a;font-size:10px;letter-spacing:1.2px;text-align:center;text-transform:uppercase;line-height:110px">No image supplied</div>'
-            card_background = "#ffffff"
-            card_border = "#c77983" if filtered else "#cbdbe5"
-            source_color = _source_color(source)
-            status_label = (
-                '<span style="display:inline-block;margin:0 6px 10px 0;padding:4px 8px;background:#f3ddda;border:1px solid #d7aaa4;border-radius:999px;color:#813d38;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">filtered</span>'
-                if filtered else
-                '<span style="display:inline-block;margin:0 6px 10px 0;padding:4px 8px;background:#e5efc7;border:1px solid #b9d27d;border-radius:999px;color:#38530f;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">Passed</span>'
-            )
-            source_label = f'<span style="display:inline-block;margin:0 6px 10px 0;padding:4px 8px;background:{source_color};border:1px solid {source_color};border-radius:999px;color:#f7f5ee;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">{html.escape(source)}</span>'
-            category_label = f'<span style="display:inline-block;margin:0 6px 10px 0;padding:4px 8px;background:{category_background};border:1px solid {category_background};color:{category_text};border-radius:999px;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">{html.escape(category.upper())}</span>'
-            local_label = '<span style="display:inline-block;margin:0 0 10px;padding:4px 7px;background:#d7ed62;color:#182b2b;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">LOCAL</span>' if row.get("local") else ""
-            translated_from, _ = _description_parts(row.get("description"))
-            description_markup = "" if filtered else _description_html(row.get("description"))
-            translation_label = f'<span style="display:block;margin:0 0 4px;color:#a6534c;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase">Translated from {html.escape(translated_from)}</span>' if translated_from else ""
-            description_html = f'<p class="listing-description" style="margin:0 0 12px;font-size:13px;line-height:1.45;color:#55706b;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden"><strong>Description</strong>{translation_label}<br>{description_markup}</p>' if description_markup else ""
-            blocks.append(f'''<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#f7f5ee;border-left:1px solid #dce6e1;border-right:1px solid #dce6e1">
+    for row in sorted(rows, key=_digest_sort_key):
+        section, source = row.get("section", "Passed"), row["source"]
+        filtered = section == "Filtered"
+        reason = row.get("taste_reason") or row.get("filter_reason") or row.get("title_reason") or "Matched configured search"
+        like = _feedback_link(feedback_recipient, "like", row["source"], row["external_id"], row["title"])
+        dislike = _feedback_link(feedback_recipient, "dislike", row["source"], row["external_id"], row["title"])
+        remaining = _remaining(row.get("sale_end_at"))
+        category = _category_label(row.get("category"))
+        category_background, category_text = _category_colors(row.get("category"))
+        category_metadata = (
+            f'<p style="margin:0 0 14px;color:#71807a;font-size:11px;line-height:1.55">Category: <strong>{html.escape(category)}</strong></p>'
+            if row.get("category") is None else ""
+        )
+        description = "" if filtered else _description(row.get("description"))
+        text.extend([row["title"], _price(row["price"], row["currency"], row["price_usd"]), row["url"]])
+        if remaining:
+            text.append(remaining)
+        text.extend([f"Category: {category}", f"Verdict: {row.get('taste_verdict') or 'filtered'}. {reason}", f"Like: {like}", f"Dislike: {dislike}", ""])
+        if description:
+            text.insert(-1, f"Description: {description}")
+        image = (row.get("image_urls") or [""])[0]
+        image_source = (image_sources or {}).get(row["external_id"], image)
+        image_html = f'<img src="{html.escape(image_source, quote=True)}" alt="Listing image" width="270" style="display:block;width:100%;max-width:270px;height:auto;max-height:250px;object-fit:cover">' if image_source else '<div style="height:110px;background:#e8eeea;color:#8ca09a;font-size:10px;letter-spacing:1.2px;text-align:center;text-transform:uppercase;line-height:110px">No image supplied</div>'
+        card_background = "#ffffff"
+        card_border = "#c77983" if filtered else "#cbdbe5"
+        source_color = _source_color(source)
+        status_label = (
+            '<span style="display:inline-block;margin:0 6px 10px 0;padding:4px 8px;background:#f3ddda;border:1px solid #d7aaa4;border-radius:999px;color:#813d38;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">filtered</span>'
+            if filtered else
+            '<span style="display:inline-block;margin:0 6px 10px 0;padding:4px 8px;background:#e5efc7;border:1px solid #b9d27d;border-radius:999px;color:#38530f;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">Passed</span>'
+        )
+        reason_label = f'<span style="display:block;width:max-content;margin:0 0 10px;padding:4px 8px;background:#edf4f8;border:1px solid #cbdbe5;border-radius:999px;color:#55706b;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">{html.escape(_filter_reason_label(row))}</span>'
+        source_label = f'<span style="display:inline-block;margin:0 6px 10px 0;padding:4px 8px;background:{source_color};border:1px solid {source_color};border-radius:999px;color:#f7f5ee;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">{html.escape(source)}</span>'
+        category_label = f'<span style="display:inline-block;margin:0 6px 10px 0;padding:4px 8px;background:{category_background};border:1px solid {category_background};color:{category_text};border-radius:999px;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">{html.escape(category.upper())}</span>'
+        local_label = '<span style="display:inline-block;margin:0 0 10px;padding:4px 7px;background:#d7ed62;color:#182b2b;font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">LOCAL</span>' if row.get("local") else ""
+        translated_from, _ = _description_parts(row.get("description"))
+        description_markup = "" if filtered else _description_html(row.get("description"))
+        translation_label = f'<span style="display:block;margin:0 0 4px;color:#a6534c;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase">Translated from {html.escape(translated_from)}</span>' if translated_from else ""
+        description_html = f'<p class="listing-description" style="margin:0 0 12px;font-size:13px;line-height:1.45;color:#55706b;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden"><strong>Description</strong>{translation_label}<br>{description_markup}</p>' if description_markup else ""
+        blocks.append(f'''<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:#f7f5ee;border-left:1px solid #dce6e1;border-right:1px solid #dce6e1">
  <tr><td style="padding:8px 12px 20px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background:{card_background};border:1px solid {card_border}">
  <tr><td class="listing-media" width="42%" valign="top" style="padding:0;background:#e8eeea">{image_html}</td><td class="listing-copy" width="58%" valign="top" style="padding:23px 25px 21px">
-     {status_label}{source_label}{category_label}{local_label}<h3 style="margin:0 0 10px;font-family:Georgia,'Times New Roman',serif;font-size:23px;line-height:1.1;font-weight:400;letter-spacing:-.35px"><a style="color:#182b2b;text-decoration:none" href="{html.escape(row['url'], quote=True)}">{html.escape(row['title'])}</a></h3>
+      {status_label}{reason_label}<div>{source_label}{category_label}{local_label}</div><h3 style="margin:0 0 10px;font-family:Georgia,'Times New Roman',serif;font-size:23px;line-height:1.1;font-weight:400;letter-spacing:-.35px"><a style="color:#182b2b;text-decoration:none" href="{html.escape(row['url'], quote=True)}">{html.escape(row['title'])}</a></h3>
    <p style="margin:0 0 5px;color:#557c1d;font-size:17px;font-weight:700;letter-spacing:-.15px">{html.escape(_price(row['price'], row['currency'], row['price_usd']))}</p>
    {f'<p style="margin:0 0 15px;color:#7b8984;font-size:11px">{html.escape(remaining)}</p>' if remaining else '<div style="height:15px"></div>'}
-    {description_html}{category_metadata}<p style="margin:0 0 17px;color:#294442;font-size:13px;line-height:1.5">{html.escape(reason)}</p>
-   <p style="margin:0;font-size:12px"><a style="display:inline-block;padding:9px 15px;background:#d7ed62;color:#182b2b;font-weight:700;text-decoration:none" href="{html.escape(like, quote=True)}">Like</a>&nbsp;&nbsp;<a style="display:inline-block;padding:8px 14px;border:1px solid #a9b9b2;color:#55706b;text-decoration:none" href="{html.escape(dislike, quote=True)}">Dislike</a></p>
+     {description_html}{category_metadata}<p style="margin:0 0 17px;color:#294442;font-size:13px;line-height:1.5">{html.escape(reason)}</p>
+    {f'<details style="margin:0 0 17px;color:#55706b;font-size:11px"><summary style="cursor:pointer;font-weight:700">Returned by saved search</summary><p style="margin:7px 0 0">{html.escape((row.get("raw_data") or {}).get("_search_config", {}).get("query", "Unknown search"))}</p></details>' if (row.get("raw_data") or {}).get("_search_config", {}).get("query") else ''}
+    <p style="margin:0;font-size:12px"><a style="display:inline-block;padding:9px 15px;background:#d7ed62;color:#182b2b;font-weight:700;text-decoration:none" href="{html.escape(like, quote=True)}">Like</a>&nbsp;&nbsp;<a style="display:inline-block;padding:8px 14px;border:1px solid #a9b9b2;color:#55706b;text-decoration:none" href="{html.escape(dislike, quote=True)}">Dislike</a></p>
  </td></tr></table></td></tr></table>''')
     if not rows:
         text.append("No matching listings.")
@@ -274,15 +288,17 @@ def fetch_rows(conn, start: datetime, include_filtered: bool = False) -> list[di
         l.description, l.url, l.image_urls, l.sale_end_at, l.raw_data, l.filter_status, l.filter_reason,
          j.title_reason, j.title_pass, j.category, j.taste_verdict, j.taste_reason
          from listings l left join ai_judgments j on j.listing_id = l.id
-         where l.digest_seen_at is null and l.filter_status = 'passed' and j.title_pass = true and
-           (j.taste_verdict in ('like', 'uncertain') or (%s and l.filter_status = 'passed' and j.taste_verdict = 'dislike'))
-         order by case when j.taste_verdict = 'dislike' then 1 else 0 end, l.source, l.fetched_at desc""", (include_filtered,)).fetchall()
+         where l.digest_seen_at is null and (
+           (l.filter_status = 'passed' and j.title_pass = true and
+             (j.taste_verdict in ('like', 'uncertain') or (%s and j.taste_verdict = 'dislike')))
+           or (%s and l.filter_status = 'filtered')
+         )""", (include_filtered, include_filtered)).fetchall()
     keys = ("source", "external_id", "title", "price", "currency", "price_usd", "description", "url", "image_urls", "sale_end_at", "raw_data", "filter_status", "filter_reason", "title_reason", "title_pass", "category", "taste_verdict", "taste_reason")
     output = [dict(zip(keys, row)) for row in rows]
     for row in output:
         row["local"] = bool((row.get("raw_data") or {}).get("local"))
-        row["section"] = "Filtered" if row["taste_verdict"] == "dislike" else "Passed"
-    return output
+        row["section"] = "Filtered" if row["filter_status"] == "filtered" or row["taste_verdict"] == "dislike" else "Passed"
+    return sorted(output, key=_digest_sort_key)
 
 
 def fetch_usage(conn, start: datetime) -> dict:
@@ -301,7 +317,7 @@ def fetch_efficiency(conn, start: datetime, include_filtered: bool = False) -> l
          count(distinct l.id) filter (where l.filter_status = 'passed' and j.title_pass = true and j.taste_verdict = 'dislike' and %s) as dislike_count,
          count(distinct l.id) filter (where l.filter_status = 'passed' and j.title_pass = true and j.taste_verdict = 'dislike') as taste_classifier_failure_count,
          count(distinct l.id) filter (where l.filter_status = 'filtered') as discrete_filter_failures
-        from generate_series(%s::date - interval '4 days', %s::date, interval '1 day') as day
+         from generate_series(greatest(%s::date - interval '4 days', current_date - interval '4 days'), greatest(%s::date, current_date), interval '1 day') as day
         left join listings l on l.fetched_at >= greatest(day, %s) and l.fetched_at < day + interval '1 day'
         left join ai_judgments j on j.listing_id = l.id
         group by day
