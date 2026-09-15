@@ -15,9 +15,15 @@ def _normalized_content(value: str) -> str:
 
 
 def content_exclusion(row: dict, search: dict) -> str | None:
-    content = _normalized_content(f"{row.get('title') or ''} {row.get('description') or ''}")
+    content = (
+        _normalized_content(row.get("title") or ""),
+        _normalized_content(row.get("description") or ""),
+    )
     phrases = (*GLOBAL_EXCLUDED_CONTENT, *search.get("exclude_content", []))
-    return next((phrase for phrase in phrases if _normalized_content(phrase) in content), None)
+    return next(
+        (phrase for phrase in phrases if _normalized_content(phrase) in content),
+        None,
+    )
 
 
 def _shoe_size_values(text: str) -> list[tuple[float, str | None]]:
