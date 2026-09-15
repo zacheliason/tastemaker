@@ -22,6 +22,9 @@ MAX_INLINE_ATTACHMENTS = 500
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_IMAGE_DIMENSION = 1600
 IMAGE_QUALITY = 85
+# Gmail's limit is 25 MiB after MIME/base64 encoding. Leave room for headers,
+# HTML, and the two digest charts.
+MAX_EMAIL_BYTES = 24 * 1024 * 1024
 INPUT_COST_PER_MILLION = 0.20
 OUTPUT_COST_PER_MILLION = 1.20
 CACHE_READ_COST_PER_MILLION = 0.02
@@ -528,9 +531,57 @@ def deliver(conn, start: datetime, recipient: str, dry_run: bool = False, includ
     # Reserve two attachment slots for the pipeline charts on every message.
     chunk_size = MAX_INLINE_ATTACHMENTS - int(bool(figure)) - int(bool(outcomes))
     chunks = [rows[offset:offset + chunk_size] for offset in range(0, len(rows), chunk_size)]
-    total_parts = len(chunks)
-    for index, chunk in enumerate(chunks, 1):
-        image_sources, attachments = download_images(chunk) if not dry_run else ({}, [])
+    prepared = []
+
+    def prepare(chunk, image_sources=None, attachments=None):
+        if image_sources is None or attachments is None:
+            image_sources, attachments = download_images(chunk) if not dry_run else ({}, [])
+        message = _build_message(
+            chunk, recipient, start, feedback_recipient, fetch_usage(conn, start),
+            image_sources, translation_usage, efficiency, figure, outcomes, None,
+        )
+        html_part = message.get_payload()[-1]
+        for cid, data, maintype, subtype in attachments:
+            html_part.add_related(data, maintype=maintype, subtype=subtype, cid=cid, disposition="inline")
+        if figure:
+            html_part.add_related(figure, maintype="image", subtype="jpeg", cid="efficiency-pulse", disposition="inline")
+        if outcomes:
+            html_part.add_related(outcomes, maintype="image", subtype="jpeg", cid="pipeline-outcomes", disposition="inline")
+
+        # Split by actual wire size. Image dimensions and source download limits
+        # are not sufficient because many moderate images can still be huge as a
+        # single base64-encoded MIME message.
+        if len(message.as_bytes()) > MAX_EMAIL_BYTES and len(chunk) > 1:
+            midpoint = len(chunk) // 2
+            first_ids = {row["external_id"] for row in chunk[:midpoint]}
+            first_sources = {
+                external_id: source for external_id, source in image_sources.items()
+                if external_id in first_ids
+            }
+            first_cids = set(first_sources.values())
+            first_attachments = [
+                attachment for attachment in attachments
+                if f"cid:{attachment[0]}" in first_cids
+            ]
+            second_sources = {
+                external_id: source for external_id, source in image_sources.items()
+                if external_id not in first_ids
+            }
+            second_cids = set(second_sources.values())
+            second_attachments = [
+                attachment for attachment in attachments
+                if f"cid:{attachment[0]}" in second_cids
+            ]
+            return prepare(chunk[:midpoint], first_sources, first_attachments) + prepare(
+                chunk[midpoint:], second_sources, second_attachments
+            )
+        return [(chunk, image_sources, attachments)]
+
+    for chunk in chunks:
+        prepared.extend(prepare(chunk))
+
+    total_parts = len(prepared)
+    for index, (chunk, image_sources, attachments) in enumerate(prepared, 1):
         message = _build_message(
             chunk, recipient, start, feedback_recipient, fetch_usage(conn, start),
             image_sources, translation_usage, efficiency, figure, outcomes,
