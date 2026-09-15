@@ -25,6 +25,11 @@ def enabled_searches(settings: dict) -> list[dict]:
     return [item for item in settings.get("searches", []) if item.get("enabled", True)]
 
 
+def hard_filters(config: dict) -> dict:
+    """Return filters that apply to every source and search."""
+    return config.get("hard_filters", {})
+
+
 def adapter_for(settings: dict):
     import importlib
     adapter = settings.get("adapter")

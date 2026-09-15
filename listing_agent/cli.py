@@ -4,7 +4,7 @@ import json
 import logging
 from pathlib import Path
 from datetime import datetime
-from .config import adapter_for, configured_sources, enabled_searches, load_searches
+from .config import adapter_for, configured_sources, enabled_searches, hard_filters, load_searches
 from .db import clear_stale, save
 
 
@@ -130,6 +130,7 @@ def main() -> None:
         print(f"digest {status}: {count} listings")
         return
     configured = dict(configured_sources(config))
+    global_exclusions = hard_filters(config).get("exclude_content", [])
     sources = [args.source] if args.source else list(configured)
     total = 0
     for source in sources:
@@ -147,7 +148,9 @@ def main() -> None:
             if "allowed_size_fields" in settings:
                 defaults["allowed_size_fields"] = settings["allowed_size_fields"]
             if "exclude_content" in settings:
-                defaults["exclude_content"] = settings["exclude_content"]
+                defaults["exclude_content"] = [*global_exclusions, *settings["exclude_content"]]
+            elif global_exclusions:
+                defaults["exclude_content"] = global_exclusions
             account_searches = adapter.saved_searches(defaults)
             # Account mode is authoritative; configured searches are not a fallback.
             searches = account_searches
@@ -164,7 +167,9 @@ def main() -> None:
             if "allowed_size_fields" in settings:
                 effective_search["allowed_size_fields"] = settings["allowed_size_fields"]
             if "exclude_content" in settings:
-                effective_search["exclude_content"] = settings["exclude_content"]
+                effective_search["exclude_content"] = [*global_exclusions, *settings["exclude_content"]]
+            elif global_exclusions:
+                effective_search["exclude_content"] = global_exclusions
             if settings.get("enrichment_provider"):
                 effective_search["enrichment_provider"] = settings["enrichment_provider"]
             for key in ("catalog_categories", "catalog_max_pages"):

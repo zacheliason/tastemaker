@@ -3,23 +3,24 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 import re
-from .config import configured_sources, enabled_searches
+from .config import configured_sources, enabled_searches, hard_filters
 
 
 logger = logging.getLogger(__name__)
-GLOBAL_EXCLUDED_CONTENT = ("offset lithograph",)
+DEFAULT_HARD_EXCLUDED_CONTENT = ("offset lithograph",)
 
 
 def _normalized_content(value: str) -> str:
     return " ".join(value.casefold().split())
 
 
-def content_exclusion(row: dict, search: dict) -> str | None:
+def content_exclusion(row: dict, search: dict, global_filters: dict | None = None) -> str | None:
     content = (
         _normalized_content(row.get("title") or ""),
         _normalized_content(row.get("description") or ""),
     )
-    phrases = (*GLOBAL_EXCLUDED_CONTENT, *search.get("exclude_content", []))
+    global_phrases = (global_filters or {}).get("exclude_content", DEFAULT_HARD_EXCLUDED_CONTENT)
+    phrases = (*global_phrases, *search.get("exclude_content", []))
     return next(
         (phrase for phrase in phrases if _normalized_content(phrase) in content),
         None,
@@ -70,8 +71,8 @@ def _title_size_mismatch(row: dict, search: dict) -> tuple[str, str] | None:
     return None
 
 
-def evaluate(row: dict, search: dict) -> tuple[str, str | None]:
-    excluded_content = content_exclusion(row, search)
+def evaluate(row: dict, search: dict, global_filters: dict | None = None) -> tuple[str, str | None]:
+    excluded_content = content_exclusion(row, search, global_filters)
     if excluded_content:
         return "filtered", f"excluded content: {excluded_content}"
     title = (row.get("title") or "").lower()
@@ -119,6 +120,7 @@ def evaluate(row: dict, search: dict) -> tuple[str, str | None]:
 def apply(conn, searches: dict, source: str | None = None,
           since: datetime | None = None) -> dict[str, dict[str, int]]:
     configured = dict(configured_sources(searches))
+    global_filters = hard_filters(searches)
     sources = [source] if source else list(configured)
     summary = {}
     for current_source in sources:
@@ -137,9 +139,18 @@ def apply(conn, searches: dict, source: str | None = None,
             data = {"title": row[2], "description": row[3], "price_usd": row[4], "size_fields": row[5]}
             search = dict(source_searches.get(row[1]) or (row[6] or {}).get("_search_config", {}))
             search.setdefault("exclude_content", configured[current_source].get("exclude_content", []))
+            if global_filters.get("exclude_content"):
+                search["exclude_content"] = [
+                    *global_filters["exclude_content"], *search.get("exclude_content", [])
+                ]
             if "max_price_usd" in configured[current_source]:
                 search["max_price_usd"] = configured[current_source]["max_price_usd"]
-            status, reason = evaluate(data, search)
+            if data["price_usd"] is None:
+                logger.error(
+                    "MISSING PRICE at deterministic filtering: source=%s search_id=%s listing_id=%s title=%r price_usd=%r",
+                    current_source, row[1], row[0], row[2], data["price_usd"],
+                )
+            status, reason = evaluate(data, search, global_filters)
             if status == "passed":
                 passed += 1
             else:

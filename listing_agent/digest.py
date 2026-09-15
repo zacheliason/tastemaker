@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import hashlib
+import logging
 import os
 import re
 import smtplib
@@ -16,6 +17,9 @@ from bs4 import BeautifulSoup, Comment
 from PIL import Image, ImageOps
 
 from .translation import translate_rows
+
+
+logger = logging.getLogger(__name__)
 
 
 MAX_INLINE_ATTACHMENTS = 500
@@ -299,6 +303,12 @@ def fetch_rows(conn, start: datetime, include_filtered: bool = False) -> list[di
     keys = ("source", "external_id", "title", "price", "currency", "price_usd", "description", "url", "image_urls", "sale_end_at", "raw_data", "filter_status", "filter_reason", "title_reason", "title_pass", "category", "taste_verdict", "taste_reason")
     output = [dict(zip(keys, row)) for row in rows]
     for row in output:
+        if row["price"] is None or row["price_usd"] is None:
+            logger.error(
+                "MISSING PRICE in digest: source=%s external_id=%s title=%r price=%r currency=%r price_usd=%r",
+                row["source"], row["external_id"], row["title"], row["price"],
+                row["currency"], row["price_usd"],
+            )
         row["local"] = bool((row.get("raw_data") or {}).get("local"))
         row["section"] = "Filtered" if row["filter_status"] == "filtered" or row["taste_verdict"] == "dislike" else "Passed"
     return sorted(output, key=_digest_sort_key)

@@ -1,5 +1,11 @@
 {
   "default_enrichment_source": "invaluable",
+  "hard_filters": {
+    "exclude_content": [
+      "offset lithograph",
+      "google cloud platform"
+    ]
+  },
   "sources": {
     "ebay": {
       "enabled": true,
@@ -43,7 +49,6 @@
       ],
       "catalog_max_pages": 100,
       "exclude_content": [
-        "Google cloud platform",
         "Zenrows"
       ],
       "max_price_usd": 200,

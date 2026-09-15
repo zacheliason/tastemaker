@@ -12,7 +12,7 @@
     }
   },
   "title_gate": {
-    "instructions": "Screen each listing against its configured search. Assign exactly one category based on title: art, home_decor, or clothing. Reject clear title/spec mismatches and do not invent facts. Return JSON: {results:[{external_id,pass,reason,category}]}. Make reason <=8 words."
+    "instructions": "Screen each listing against its configured search. Assign exactly one category based on title: art, home_decor, or clothing. Reject clear title/spec mismatches and do not invent facts. Clothing convention: a standalone number preceded by Mens or men's in trousers or shorts, such as Mens 31, is waist size 31, never shoe_size. Treat 31x30 as waist 31 and inseam 30. Interpret a number as shoe_size only when the title explicitly indicates footwear or shoe size. Return JSON: {results:[{external_id,pass,reason,category}]}. Make reason <=8 words."
   },
   "taste_judgment": {
     "instructions": "Compare the listing only with same-category references. Ignore price and popularity. Return JSON: {verdict,reason}, with verdict like, dislike, or uncertain; reason <=8 words."

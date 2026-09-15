@@ -130,6 +130,7 @@ Within each source’s `searches` array, edit:
 
 - eBay uses the official Browse API; eBay pages are not scraped.
 - Set `max_price_usd` once on each source to apply a local USD price cap to all of that source's searches.
+- Set top-level `hard_filters.exclude_content` to reject normalized, case-insensitive title or description matches from every source. Keep universal exclusions such as `offset lithograph` and `google cloud platform` there; use a source's `exclude_content` for source-specific markers.
 - eBay account searches support source-level `saved_search_defaults`, including `limit` and Browse API `sort` (for example, `bestMatch`), to control how many ranked results are ingested per search.
 - Set `account_saved_searches` to `true` to retrieve the authenticated eBay buyer's Saved Searches through `GetMyeBayBuying`; this requires `EBAY_REFRESH_TOKEN`.
 - When `account_saved_searches` is enabled, the account's saved searches are the complete eBay search set; entries in that source's `searches` array are ignored.

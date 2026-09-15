@@ -1,7 +1,11 @@
 import json
+import logging
 import os
 from .models import Listing
 from .urls import strip_queries, strip_query
+
+
+logger = logging.getLogger(__name__)
 
 
 def clear_stale(conn) -> int:
@@ -26,6 +30,12 @@ def save(listings: list[Listing]) -> int:
                     continue
                 item.url = strip_query(item.url)
                 item.image_urls = strip_queries(item.image_urls)
+                if item.price is None or item.price_usd is None:
+                    logger.error(
+                        "MISSING PRICE at listing save: source=%s search_id=%s external_id=%s title=%r price=%r currency=%r price_usd=%r",
+                        item.source, item.search_id, item.external_id, item.title,
+                        item.price, item.currency, item.price_usd,
+                    )
                 if item.source == "ebay":
                     already_seen = cur.execute(
                         "select 1 from listings where source = %s and (external_id = %s or lower(url) = lower(%s)) limit 1",
